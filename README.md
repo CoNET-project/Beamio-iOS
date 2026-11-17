@@ -19,3 +19,14 @@ xcodebuild -resolvePackageDependencies -project CashTrees_iOS.xcodeproj -scheme 
 - For a release, use a specific commit from this repository. Record the iOS version and build number, embedded ZIP SHA-256, and signed artifact SHA-256 with the test results. TestFlight uploads and public App Store releases are separate steps.
 
 Keep device captures, test-account recovery material, provisioning profiles, and signing credentials out of this repository.
+
+## Verify the release archive
+
+Use the approved PWA version and SHA-256 from the release record. Run the post-build check outside the Xcode build sandbox so it can scan the complete app bundle, including frameworks and other resources.
+
+```sh
+scripts/verify-ios-single-zip.sh pre --ver "$PWA_VERSION" --sha256 "$PWA_ZIP_SHA256"
+scripts/verify-ios-single-zip.sh post --ver "$PWA_VERSION" --sha256 "$PWA_ZIP_SHA256" "$IOS_ARCHIVE_PATH"
+```
+
+The initial `1.5.8 (105)` source import carries PWA `0.52.933`, SHA-256 `f0aa310315164d1edf646b583665fccaa35febdd35cc87572ea3dd0f352c288d`.

@@ -1,0 +1,294 @@
+//
+//  CashTreesPWABundleStore.swift
+//  CashTrees_iOS
+//
+
+import Foundation
+import ZIPFoundation
+
+extension Notification.Name {
+    static let cashTreesEmbeddedPwaUpdateAvailable = Notification.Name("cashTreesEmbeddedPwaUpdateAvailable")
+}
+
+/// Documents-backed PWA bundle: `active/` (live), `staging/` (downloaded), `backup/` (rollback).
+///
+/// Wallet / IndexedDB live in WKWebsiteDataStore under `Library/WebKit` (origin
+/// `cashtrees-local://localhost`), **not** under `silentpass_pwa/`. Replacing
+/// `active/` must never clear website data. Device uninstall is what wipes the
+/// wallet — prefer install-over only (`beamio-ios-debug-mirror-device-only.mdc`).
+final class CashTreesPWABundleStore {
+    static let shared = CashTreesPWABundleStore()
+
+    private let fileManager = FileManager.default
+    private let lock = NSLock()
+
+    let rootDir: URL
+    let activeDir: URL
+    let stagingDir: URL
+    let backupDir: URL
+
+    private(set) var pendingVersion: String?
+
+    private init() {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            fatalError("Documents directory unavailable")
+        }
+        rootDir = documents.appendingPathComponent("silentpass_pwa", isDirectory: true)
+        activeDir = rootDir.appendingPathComponent("active", isDirectory: true)
+        stagingDir = rootDir.appendingPathComponent("staging", isDirectory: true)
+        backupDir = rootDir.appendingPathComponent("backup", isDirectory: true)
+        pendingVersion = Self.readPendingVersion(from: stagingDir)
+    }
+
+    /// Test seam: the same layout under an explicit root (the app uses `shared`).
+    init(testRootDir: URL) {
+        rootDir = testRootDir
+        activeDir = testRootDir.appendingPathComponent("active", isDirectory: true)
+        stagingDir = testRootDir.appendingPathComponent("staging", isDirectory: true)
+        backupDir = testRootDir.appendingPathComponent("backup", isDirectory: true)
+        pendingVersion = Self.readPendingVersion(from: stagingDir)
+    }
+
+    func bootstrapIfNeeded() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try fileManager.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        guard let zipPath = Bundle.main.url(forResource: "SilentPassUI", withExtension: "zip") else {
+            if hasValidBundle(at: activeDir) { return }
+            throw NSError(
+                domain: "CashTreesPWABundleStore",
+                code: 404,
+                userInfo: [NSLocalizedDescriptionKey: "SilentPassUI.zip missing from app bundle"]
+            )
+        }
+        let bundledDir = rootDir.appendingPathComponent("bundled", isDirectory: true)
+        if fileManager.fileExists(atPath: bundledDir.path) {
+            try? fileManager.removeItem(at: bundledDir)
+        }
+        try fileManager.createDirectory(at: bundledDir, withIntermediateDirectories: true)
+        try fileManager.unzipItem(at: zipPath, to: bundledDir)
+        removeMacOsMetadata(from: bundledDir)
+        guard hasValidBundle(at: bundledDir) else {
+            try? fileManager.removeItem(at: bundledDir)
+            throw NSError(
+                domain: "CashTreesPWABundleStore",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "Bundled SilentPassUI.zip did not contain index.html"]
+            )
+        }
+        let activeIsValid = hasValidBundle(at: activeDir)
+        let activeUsesEmbeddedPaths = activeIsValid && usesEmbeddedAssetPaths(at: activeDir)
+        // Force-quit CallKit wake needs HTTP /api/registerPushDevice so ios_voip
+        // reaches the API when mailbox SI has no push_device_register. A newer
+        // Documents active (e.g. 0.52.852 OTA without HTTP) must not stick over
+        // a bundled build that includes the HTTP fallback.
+        let activeHasPushHttp = activeIsValid && bundleHasRegisterPushDeviceHttp(at: activeDir)
+        let bundledHasPushHttp = bundleHasRegisterPushDeviceHttp(at: bundledDir)
+        let activeVersion = activeIsValid ? readUpdateInfo(from: activeDir)?.ver : nil
+        let bundledVersion = readUpdateInfo(from: bundledDir)?.ver
+        let shouldInstallBundled =
+            !activeIsValid
+            || !activeUsesEmbeddedPaths
+            || (bundledHasPushHttp && !activeHasPushHttp)
+            || (
+                activeVersion != nil
+                    && bundledVersion != nil
+                    && Self.isSemverNewer(oldVer: activeVersion!, newVer: bundledVersion!)
+            )
+        if !shouldInstallBundled {
+            try? fileManager.removeItem(at: bundledDir)
+            return
+        }
+        // Documents-only swap. Do not touch WKWebsiteDataStore / Library/WebKit.
+        if fileManager.fileExists(atPath: activeDir.path) {
+            try? fileManager.removeItem(at: activeDir)
+        }
+        try fileManager.moveItem(at: bundledDir, to: activeDir)
+    }
+
+    func activeRootDirectory() -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeDir
+    }
+
+    func activeVersion() -> String {
+        readUpdateInfo(from: activeDir)?.ver ?? "0.0.0"
+    }
+
+    func resolveFileURL(for requestPath: String) -> URL? {
+        let root = activeRootDirectory()
+        var path = requestPath
+        if path.isEmpty || path == "/" { path = "/index.html" }
+        if !path.hasPrefix("/") { path = "/\(path)" }
+        let relative = String(path.dropFirst())
+        let candidate = root.appendingPathComponent(relative)
+        if fileManager.fileExists(atPath: candidate.path) { return candidate }
+        if !relative.contains(".") {
+            let index = root.appendingPathComponent("index.html")
+            if fileManager.fileExists(atPath: index.path) { return index }
+        }
+        return nil
+    }
+
+    func installDownloadToStaging(from zipFile: URL, expectedVersion: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if fileManager.fileExists(atPath: stagingDir.path) {
+            try fileManager.removeItem(at: stagingDir)
+        }
+        try fileManager.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        try fileManager.unzipItem(at: zipFile, to: stagingDir)
+        removeMacOsMetadata(from: stagingDir)
+        guard hasValidBundle(at: stagingDir) else {
+            try? fileManager.removeItem(at: stagingDir)
+            pendingVersion = nil
+            throw NSError(
+                domain: "CashTreesPWABundleStore",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "Downloaded bundle missing index.html"]
+            )
+        }
+        // Persist version for cold-start pending restore (zip usually includes update.json).
+        let info = CashTreesPWAUpdateInfo(ver: expectedVersion, filename: "SilentPassUI-\(expectedVersion).zip")
+        if let data = try? JSONEncoder().encode(info) {
+            try? data.write(to: stagingDir.appendingPathComponent("update.json"), options: .atomic)
+        }
+        pendingVersion = expectedVersion
+    }
+
+    func promoteStagingToActive() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        // `pendingVersion` is an in-memory hint and can be lost when the
+        // WebView/app lifecycle recreates the store. The staging directory is
+        // the durable source of truth for an OTA update.
+        pendingVersion = Self.readPendingVersion(from: stagingDir)
+        guard hasValidBundle(at: stagingDir) else {
+            pendingVersion = nil
+            throw NSError(
+                domain: "CashTreesPWABundleStore",
+                code: 404,
+                userInfo: [NSLocalizedDescriptionKey: "No staged PWA update"]
+            )
+        }
+        if fileManager.fileExists(atPath: backupDir.path) {
+            try? fileManager.removeItem(at: backupDir)
+        }
+        if fileManager.fileExists(atPath: activeDir.path) {
+            try fileManager.moveItem(at: activeDir, to: backupDir)
+        }
+        try fileManager.moveItem(at: stagingDir, to: activeDir)
+        pendingVersion = nil
+    }
+
+    func clearStaging() {
+        lock.lock()
+        defer { lock.unlock() }
+        try? fileManager.removeItem(at: stagingDir)
+        pendingVersion = nil
+    }
+
+    func hasPendingUpdate() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let diskVersion = Self.readPendingVersion(from: stagingDir) {
+            pendingVersion = diskVersion
+        } else {
+            pendingVersion = nil
+        }
+        return pendingVersion != nil && hasValidBundle(at: stagingDir)
+    }
+
+    func pendingUpdateVersion() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingVersion = Self.readPendingVersion(from: stagingDir)
+        guard pendingVersion != nil, hasValidBundle(at: stagingDir) else { return nil }
+        return pendingVersion
+    }
+
+    // MARK: - Helpers
+
+    private func hasValidBundle(at dir: URL) -> Bool {
+        fileManager.fileExists(atPath: dir.appendingPathComponent("index.html").path)
+    }
+
+    /// The app shell serves the PWA at the root of `cashtrees-local://`.
+    /// Older consumer bundles were built for `/app/`, so their JS/CSS requests
+    /// pointed at a non-existent local `/app` directory and left only the splash
+    /// logo visible. Treat those bundles as incompatible even when their
+    /// semver is unchanged, so an app update repairs existing installations.
+    private func usesEmbeddedAssetPaths(at dir: URL) -> Bool {
+        let indexURL = dir.appendingPathComponent("index.html")
+        guard let html = try? String(contentsOf: indexURL, encoding: .utf8) else {
+            return false
+        }
+        return !html.contains("src=\"/app/")
+            && !html.contains("href=\"/app/")
+    }
+
+    /// True when any JS chunk posts to `/api/registerPushDevice` (HTTP fallback
+    /// for PushKit `ios_voip` when CoNET-SI lacks `push_device_register`).
+    private func bundleHasRegisterPushDeviceHttp(at dir: URL) -> Bool {
+        let staticDir = dir.appendingPathComponent("static/js", isDirectory: true)
+        let fm = fileManager
+        guard let enumerator = fm.enumerator(
+            at: staticDir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        let needle = "/api/registerPushDevice"
+        while let item = enumerator.nextObject() as? URL {
+            guard item.pathExtension == "js",
+                  let data = try? Data(contentsOf: item, options: [.mappedIfSafe]),
+                  let text = String(data: data, encoding: .utf8)
+            else { continue }
+            if text.contains(needle) { return true }
+        }
+        return false
+    }
+
+    private func readUpdateInfo(from dir: URL) -> CashTreesPWAUpdateInfo? {
+        let url = dir.appendingPathComponent("update.json")
+        guard fileManager.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let info = try? JSONDecoder().decode(CashTreesPWAUpdateInfo.self, from: data)
+        else { return nil }
+        return info
+    }
+
+    private static func readPendingVersion(from staging: URL) -> String? {
+        let fm = FileManager.default
+        let index = staging.appendingPathComponent("index.html")
+        guard fm.fileExists(atPath: index.path) else { return nil }
+        let url = staging.appendingPathComponent("update.json")
+        guard fm.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let info = try? JSONDecoder().decode(CashTreesPWAUpdateInfo.self, from: data)
+        else { return nil }
+        return info.ver
+    }
+
+    private func removeMacOsMetadata(from directory: URL) {
+        let macosx = directory.appendingPathComponent("__MACOSX", isDirectory: true)
+        if fileManager.fileExists(atPath: macosx.path) {
+            try? fileManager.removeItem(at: macosx)
+        }
+    }
+
+    static func isSemverNewer(oldVer: String, newVer: String) -> Bool {
+        let oldParts = oldVer.split(separator: ".").map { Int($0) ?? 0 }
+        let newParts = newVer.split(separator: ".").map { Int($0) ?? 0 }
+        let count = max(oldParts.count, newParts.count)
+        for i in 0..<count {
+            let o = i < oldParts.count ? oldParts[i] : 0
+            let n = i < newParts.count ? newParts[i] : 0
+            if n > o { return true }
+            if n < o { return false }
+        }
+        return false
+    }
+}
