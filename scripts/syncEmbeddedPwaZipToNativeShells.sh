@@ -44,7 +44,7 @@
 #   --delegated-freeze-manifest FILE with --unreleased-test: the delegated formal freeze
 #                    manifest (freeze_kind pm-delegated-freeze). Cannot be combined with --freeze-manifest,
 #                    --qa-manifest or --approved-*. Before anything is written: the manifest's SHA-256 must be the
-#                    frozen 02b5ee56...; the pinned verify-delegated-freeze.py (sha256 26a43f7f...) must return PASS
+#                    frozen 263fbe74...; the pinned verify-delegated-freeze.py (sha256 26a43f7f...) must return PASS
 #                    for this shell in a temporary shell root holding a copy of the manifest (the temporary root is
 #                    removed afterwards); --sha256 must equal the manifest zip_sha256 and the ZIP's ver the manifest
 #                    version. Then the shell gets a byte copy of the manifest and a lock with freeze_* keys plus
@@ -95,7 +95,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 ZIP_NAME="SilentPassUI.zip"
 # Delegated formal freeze: the shared checker's reviewed sha256 and the frozen manifest's sha256.
 DELEG_CHECKER_PIN="26a43f7f19c3557bb673215815ffdf2a905aed70db2a2c560b4fe5e8c555b270"
-DELEG_MANIFEST_PIN="02b5ee5695774555aad1cfa18676ecf87f16af00bc7bc219f1ea7c6d43b8e6ab"
+DELEG_MANIFEST_PIN="263fbe74afb03bd85df48d20c79cec7f0e78d4d3527ab0486434c9ed0eb1c981"
 
 IOS_DIR="${IOS_RESOURCES_DIR:-$REPO_ROOT/src/CashTrees_iOS/CashTrees_iOS/CashTrees_iOS}"
 ANDROID_APP="${ANDROID_APP_DIR:-$REPO_ROOT/src/CaehTrees/app}"
