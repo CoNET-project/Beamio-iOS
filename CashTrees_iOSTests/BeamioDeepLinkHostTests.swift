@@ -3,7 +3,7 @@ import Testing
 @testable import CashTrees_iOS
 
 /// Deep links for the 105 build: generated share and invite links use beamio.ca; incoming links from beamio.ca and the
-/// legacy beamio.app are both parsed; any other host is refused. (Owner ruling 2026-11-17.)
+/// legacy beamio.app are both parsed; any other host is refused (per the project decision).
 struct BeamioDeepLinkHostTests {
     @Test func generatedDefaultLinkIsBeamioCa() {
         #expect(BeamioDeepLink.defaultWebAppURL.absoluteString == "https://beamio.ca/app/")

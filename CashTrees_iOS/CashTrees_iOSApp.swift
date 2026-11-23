@@ -21,6 +21,7 @@ final class CashTreesAppDelegate: NSObject, UIApplicationDelegate, UNUserNotific
         // QA builds: the SDK crypto host's recovery events (times and states only).
         BeamioOpenPgpHost.diagnostics = { BeamioQALog.write("pgp-host \($0)") }
         #endif
+        BeamioChainEndpointConfig.apply()
         BeamioVoipIncomingBootstrap.shared.start()
         // A dial that was still ringing when the app last died: cancel it now.
         BeamioNativeVoiceSignaling.recoverDialAfterRelaunch()

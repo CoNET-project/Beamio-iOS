@@ -22,9 +22,16 @@ final class InCallScreenSnapshotTests: XCTestCase {
 			XCTFail("Could not render the call screen")
 			return
 		}
-		let path = ProcessInfo.processInfo.environment["IN_CALL_SNAPSHOT_PATH"] ?? "/tmp/chat-sdk-accept/incall-render.png"
-		try data.write(to: URL(fileURLWithPath: path))
+		// Write to a directory the test may create (the sandboxed test host has no /tmp/chat-sdk-accept). Parent is created first.
+		let path = ProcessInfo.processInfo.environment["IN_CALL_SNAPSHOT_PATH"]
+			?? FileManager.default.temporaryDirectory.appendingPathComponent("chat-sdk-accept/incall-render.png").path
+		let url = URL(fileURLWithPath: path)
+		try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+		try data.write(to: url)
 		model.end(callId: "snapshot-call")
-		XCTAssertGreaterThan(data.count, 10_000)
+		let written = try Data(contentsOf: url)
+		XCTAssertFalse(written.isEmpty, "the written PNG is not empty")
+		XCTAssertEqual(Array(written.prefix(8)), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "the written file is a PNG")
+		XCTAssertGreaterThan(written.count, 10_000)
 	}
 }

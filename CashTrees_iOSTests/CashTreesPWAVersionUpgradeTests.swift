@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CashTrees_iOS
 
-/// Standard OTA version rules for the 105 build. Project ruling (2026-11-17): the hotfix is 0.52.933 and goes through the
+/// Standard OTA version rules for the 105 build. Per the project decision, the hotfix is 0.52.933 and goes through the
 /// normal strict comparison (no same-version replacement). Nothing is lowered; a failed install keeps the old package.
 struct CashTreesPWAVersionUpgradeTests {
     static let hotfix = "0.52.933"

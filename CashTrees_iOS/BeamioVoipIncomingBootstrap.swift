@@ -1,5 +1,6 @@
 import AVFoundation
 import CallKit
+import ConetChatSDK
 import Foundation
 import PushKit
 import UIKit
@@ -44,7 +45,40 @@ final class BeamioCallKitManager: NSObject, CXProviderDelegate, CXCallObserverDe
 		/// True once CallKit title is a real `@BeamioTag` (not short EOA / "Beamio").
 		var verifiedBeamioTagApplied: Bool = false
 	}
-	private var callIds: [UUID: CallIdentity] = [:]
+	/// Every access to the map goes through `callIdsLock`: the late-offer rule reads it from the network callback thread
+	/// (`callKitHasCall`), which is not guaranteed to be the main thread, while the CallKit paths write it on the main thread.
+	/// A dictionary read racing a write is undefined; the lock serialises each read and each write.
+	private let callIdsLock = NSLock()
+	private var callIdsStorage: [UUID: CallIdentity] = [:]
+	private var callIds: [UUID: CallIdentity] {
+		get {
+			callIdsLock.lock()
+			defer { callIdsLock.unlock() }
+			return callIdsStorage
+		}
+		set {
+			callIdsLock.lock()
+			callIdsStorage = newValue
+			callIdsLock.unlock()
+		}
+	}
+
+	/// Whether CallKit currently holds an incoming call for this push callId (any UUID whose identity carries it).
+	/// Safe from any thread: it reads the map through the lock.
+	func callKitHasCall(callId: String) -> Bool {
+		callIds.values.contains { $0.callId == callId && !$0.isOutgoing }  // incoming only (outgoing excluded)
+	}
+
+#if BEAMIO_TEST_HOOKS
+	/// Test-only: stores (callId non-nil) or removes (nil) the identity of a CallKit UUID, through the same lock the providers use.
+	func setCallIdentityForTests(uuid: UUID, callId: String?) {
+		if let callId {
+			callIds[uuid] = CallIdentity(callId: callId, sessionId: "", displayHandle: "Beamio")
+		} else {
+			callIds.removeValue(forKey: uuid)
+		}
+	}
+#endif
 	/// UUID → when `callIds` was written ahead of `reportNewIncomingCall` completion.
 	/// Soft re-delivery must NOT treat a completed-but-dead map as "keep-inflight"
 	/// (flash-hide: CallKit died, map lingered, soft-recent-dead never re-reported).
@@ -67,6 +101,8 @@ final class BeamioCallKitManager: NSObject, CXProviderDelegate, CXCallObserverDe
 	/// UUIDs we ourselves asked CallKit to End (Decline / busy-flash / zombie).
 	/// System End of sticky A is NOT in this set → soft-reassert, no peer Decline.
 	private var intentionallyEndingUUIDs = Set<UUID>()
+	/// UUIDs ended by `dismissIncomingSystemCall` (v46 §52): a silent local end, no uplink, no decline.
+	private var silentDismissUUIDs = Set<UUID>()
 	/// Answered UUID waiting for CallKit `didActivate` before notifying PWA
 	/// (getUserMedia / WebRTC must not race the system in-call layout).
 	private var pendingMediaStartUUID: UUID?
@@ -258,6 +294,32 @@ final class BeamioCallKitManager: NSObject, CXProviderDelegate, CXCallObserverDe
 		if callId.isEmpty || snap.callId == callId {
 			stickyRingingSnapshot = nil
 		}
+	}
+
+	/// Page request `dismissIncomingSystemCall {callId, sessionId}` (v46 §52): stop the ring and the CallKit UI for an
+	/// unanswered incoming call. Local only: no signature, no uplink (no decline, no voice_end), no change to the native
+	/// session, the UI unlock, the generation or the dedupe records. False when no such unanswered incoming call is held.
+	/// Whether a sticky ringing snapshot belongs to exactly this call (callId and sessionId both equal). Only that
+	/// snapshot may be cleared by a dismiss: another ringing call's snapshot must stay (review, two-call case).
+	static func stickySnapshotMatches(
+		snapshotCallId: String, snapshotSessionId: String, dismissedCallId: String, dismissedSessionId: String
+	) -> Bool {
+		snapshotCallId == dismissedCallId && snapshotSessionId == dismissedSessionId
+	}
+
+	func dismissIncomingSystemCall(callId: String, sessionId: String, includeAnswered: Bool = false) -> Bool {
+		guard let uuid = callIds.first(where: {
+			$0.value.callId == callId && !$0.value.isOutgoing && (sessionId.isEmpty || $0.value.sessionId == sessionId)
+		})?.key, includeAnswered || !answeredCallUUIDs.contains(uuid) else { return false }
+		silentDismissUUIDs.insert(uuid)
+		markIntentionallyEnding(uuid)
+		controller.request(CXTransaction(action: CXEndCallAction(call: uuid))) { [weak self] err in
+			if let err {
+				self?.silentDismissUUIDs.remove(uuid)
+				NSLog("[BeamioCallKit] dismissIncomingSystemCall end failed: %@", err.localizedDescription)
+			}
+		}
+		return true
 	}
 
 	/// Mark UUID before we request CXEnd so the End handler knows it was us.
@@ -496,8 +558,8 @@ final class BeamioCallKitManager: NSObject, CXProviderDelegate, CXCallObserverDe
 			}
 			// Soft dial + PushKit often arrive with *different* callIds for the
 			// same ring. v81 tore any Active Pending sticky for a different
-			// incoming — that mutual-tear flash-hid CallKit Incoming (v90
-			// crumbs: soft 9c681eb3 vs push 73546a both CXEnd'd). Keep LIVE
+			// incoming — that mutual-tear flash-hid CallKit Incoming (both the
+			// soft and the push entries were CXEnd'd). Keep LIVE
 			// Pending sticky; busy-early / busy-pushkit declines the sibling.
 			// Still clear a dead map entry, and still tear when chrome is
 			// presumed dead (true orphan / invisible chrome — v81 intent).
@@ -5473,12 +5535,21 @@ final class BeamioCallKitManager: NSObject, CXProviderDelegate, CXCallObserverDe
 			"callkit answer callId=\(callIds[action.callUUID]?.callId.prefix(8) ?? "-") appState=\(UIApplication.shared.applicationState.rawValue)"
 		)
 		answeredCallUUIDs.insert(action.callUUID)
+		// Native bind: must succeed before any accept or
+		// authorization. A refused bind ends the call as cancelled: no entry, no signature.
+		if let boundCallId = callIds[action.callUUID]?.callId, !boundCallId.isEmpty {
+			if !BeamioNativeVoiceSignaling.bindAnsweredCall(callId: boundCallId) {
+				BeamioQALog.write("incoming bind refused callId=\(boundCallId.prefix(8)) cancelled")
+				action.fail()
+				return
+			}
+		}
 		// v3 accept first: it is prepared while ringing and runs on a background
 		// queue, needing neither the audio session nor the call screen. Doing it
 		// after both (main.sync screen build) cost 0.4–0.9 s before the accept left.
 		// Only capture waits for didActivate (calleeAudioActivated).
 		if let identity = callIds[action.callUUID], identity.isOutgoing != true {
-			BeamioNativeVoiceSignaling.sendAccept(
+			BeamioNativeVoiceSignaling.acceptWhenAuthorized(
 				callId: identity.callId,
 				sessionId: identity.sessionId,
 				mediaDeferred: true
@@ -5538,10 +5609,53 @@ final class BeamioCallKitManager: NSObject, CXProviderDelegate, CXCallObserverDe
 		// Do NOT reportCall(updated:) here — mid-Answer CXCallUpdate races the
 		// system connected-call layout. Do NOT emit callAnswered (the PWA must
 		// not run its own accept).
+		#if BEAMIO_QA_MEASURE
+		if BeamioQaMeasure.deferFulfill {
+			writeBusyQaBreadcrumb("qa-measure-defer-fulfill:uuid=\(action.callUUID.uuidString.prefix(8))")
+			return
+		}
+		writeBusyQaBreadcrumb("qa-measure-fulfill:uuid=\(action.callUUID.uuidString.prefix(8))")
+		#endif
 		action.fulfill()
 	}
 
 	func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+		// Silent local end (dismissIncomingSystemCall, v46 §52): no emit, no decline, no flush, no dedupe change.
+		if silentDismissUUIDs.remove(action.callUUID) != nil {
+			intentionallyEndingUUIDs.remove(action.callUUID)
+			let dismissedCallId = callIds[action.callUUID]?.callId
+			let dismissedSessionId = callIds[action.callUUID]?.sessionId ?? ""
+			if let boundCallId = callIds[action.callUUID]?.callId, !boundCallId.isEmpty {
+				BeamioPasscodeSession.shared.unbindIncomingCall(callId: boundCallId)
+				BeamioNativeVoiceSignaling.dropAwaitingUnlock(callId: boundCallId)
+			}
+			let wasAnsweredSilently = answeredCallUUIDs.contains(action.callUUID)
+			callIds.removeValue(forKey: action.callUUID)
+			answeredCallUUIDs.remove(action.callUUID)
+			// Answered call ended locally (endSystemCall): tear down the local media, call state and screen as the
+			// normal end does, with no uplink (no sendHangup, no cancel).
+			if wasAnsweredSilently {
+				let teardown = {
+					BeamioNativeVoiceChannel.shared.stop()
+					BeamioNativeVoiceSignaling.clearActiveCall()
+					BeamioInCallScreenModel.shared.end(callId: dismissedCallId ?? "")
+					BeamioInCallScreenModel.shared.end(callId: "")
+				}
+				if Thread.isMainThread { teardown() } else { DispatchQueue.main.async(execute: teardown) }
+			}
+			// Sticky primary and its ringing snapshot belong to this call only: clear them so no stale primary remains.
+			if stickyPrimaryUUID == action.callUUID { clearStickyPrimary(uuid: action.callUUID) }
+			// Only the snapshot of this dismissed call: another ringing call's snapshot must stay.
+			if let dismissedCallId, let snap = stickyRingingSnapshot,
+			   Self.stickySnapshotMatches(
+					snapshotCallId: snap.callId, snapshotSessionId: snap.sessionId,
+					dismissedCallId: dismissedCallId, dismissedSessionId: dismissedSessionId
+				) {
+				clearStickyRingingSnapshot(callId: snap.callId)
+			}
+			action.fulfill()
+			return
+		}
 		// v69: busy reject was queued so OpenPGP's WKWebView would not drop
 		// the live banner. Flush only once this end has cleared the call.
 		DispatchQueue.main.async { [weak self] in
@@ -5549,6 +5663,11 @@ final class BeamioCallKitManager: NSObject, CXProviderDelegate, CXCallObserverDe
 			BeamioNativeVoiceSignaling.flushDeferredStickyDeclines()
 		}
 		let uuid = action.callUUID
+		// Native unbind: the call is ending, so the SDK drops its record.
+		if let unboundCallId = callIds[uuid]?.callId, !unboundCallId.isEmpty {
+			BeamioPasscodeSession.shared.unbindIncomingCall(callId: unboundCallId)
+			BeamioNativeVoiceSignaling.dropAwaitingUnlock(callId: unboundCallId)
+		}
 		let intentional = intentionallyEndingUUIDs.remove(uuid) != nil
 		let identity = callIds[uuid]
 		let wasAnswered = answeredCallUUIDs.contains(uuid)
@@ -6393,6 +6512,12 @@ final class BeamioVoipIncomingBootstrap: NSObject, PKPushRegistryDelegate {
 
 	/// Send a call action to the PWA only (no CallKit or uplink side effects).
 	/// Queued until the WebView bridge is ready. Main thread.
+	/// nativeCallHangup (v66 §73): delivered only while the page runs. Never queued: a page that is not running
+	/// gets nothing and the hang-up is local only.
+	func emitNativeHangupIfPageRunning(callId: String, sessionId: String) {
+		webBridge?("nativeCallHangup", callId, sessionId)
+	}
+
 	func emitCallActionToWeb(_ action: String, callId: String, sessionId: String) {
 		if let webBridge {
 			webBridge(action, callId, sessionId)
@@ -6444,7 +6569,21 @@ final class BeamioVoipIncomingBootstrap: NSObject, PKPushRegistryDelegate {
 			return
 		}
 		if action == "callAnswered" {
-			BeamioNativeVoiceSignaling.sendAccept(callId: callId, sessionId: sessionId) { [weak self] acceptSessionId in
+			// Same gate as the CallKit answer: bind must succeed
+			// before any accept. A refused bind ends the call as cancelled: no signature.
+			// The callId must be one the native side holds for an incoming call (VoIP push /
+			// CallKit record), not whatever the page reports. A mismatch is refused here.
+			let nativeHoldsIncoming = BeamioVoipIncomingBootstrap.shared.callKit.callKitHasCall(callId: callId)
+			guard nativeHoldsIncoming else {
+				BeamioQALog.write("pwa answer refused: callId not held natively callId=\(callId.prefix(8))")
+				return
+			}
+			guard BeamioNativeVoiceSignaling.bindAnsweredCall(callId: callId) else {
+				BeamioQALog.write("pwa answer bind refused callId=\(callId.prefix(8)) cancelled")
+				BeamioVoipIncomingBootstrap.shared.callKit.end(callId: callId, sessionId: sessionId)
+				return
+			}
+			BeamioNativeVoiceSignaling.acceptWhenAuthorized(callId: callId, sessionId: sessionId) { [weak self] acceptSessionId in
 				// Record only, once the accept reached the caller: the PWA keeps the
 				// call history but must not run its own accept (no callAnswered).
 				guard !acceptSessionId.isEmpty else { return }
@@ -6459,8 +6598,7 @@ final class BeamioVoipIncomingBootstrap: NSObject, PKPushRegistryDelegate {
 		if action == "callEnded" {
 			// Tell the peer before the channel and the call record are torn down.
 			if !BeamioNativeVoiceSignaling.wasRemoteEnded(callId: callId, sessionId: sessionId) {
-				// Still ringing: post the page's ready cancel now (no page round trip).
-				BeamioNativeVoiceSignaling.postDialerCancelIfRinging(callId: callId)
+				// No cancel uplink from the shell (v64 §71): the page sends voice_end_v1.
 				BeamioNativeVoiceSignaling.sendHangup(callId: callId)
 			}
 			BeamioNativeVoiceChannel.shared.stop()
@@ -6566,7 +6704,7 @@ final class BeamioVoipIncomingBootstrap: NSObject, PKPushRegistryDelegate {
 			)
 			let hadLive = callKit.hasLiveCallKitCall()
 				|| (!resolvedId.isEmpty && callKit.lastReportedCallId == resolvedId)
-			BeamioNativeVoiceSignaling.applyRemoteMediaEnd(callId: resolvedId, sessionId: sessionId)
+			// v72 (1): a push end drives no call state; the live call ends by its own signed path or ring timeout.
 			if hadLive {
 				NSLog("[BeamioVoip] PushKit end — tore live CallKit callId=%@", resolvedId)
 				callKit.writeBusyQaBreadcrumb("pushkit-end-tore-live:\(resolvedId)")
@@ -6681,9 +6819,11 @@ final class BeamioVoipIncomingBootstrap: NSObject, PKPushRegistryDelegate {
 					)
 					return
 				}
-				if resolved.answerable {
+				if BeamioNativeVoiceSignaling.shouldApplyLateOffer(resolved, callId: callId, sessionId: sessionId) {
 					BeamioNativeVoiceSignaling.rememberOffer(resolved)
 					BeamioNativeVoiceSignaling.sendRingingIfNeeded(resolved)
+				} else if resolved.answerable {
+					NSLog("[BeamioVoip] late offer dropped (call not live) pushCallId=%@", callId)
 				}
 				NSLog(
 					"[BeamioVoip] offer prefetch OK pushCallId=%@ offerCallId=%@ tag=%@ answerable=%@",
@@ -6715,6 +6855,12 @@ final class BeamioVoipIncomingBootstrap: NSObject, PKPushRegistryDelegate {
 			guard let self else { return }
 			guard let resolved else {
 				NSLog("[BeamioVoip] verified identity miss callId=%@", callId)
+				self.callKit.noteIdentityResolveFinished(callId: callId, appliedTag: false)
+				return
+			}
+			// A late result for a call that has ended is dropped: no cache, no ringing, no call-screen update.
+			guard BeamioNativeVoiceSignaling.isCallStillLive(callId: callId, sessionId: sessionId) else {
+				NSLog("[BeamioVoip] late verified identity dropped (call not live) callId=%@", callId)
 				self.callKit.noteIdentityResolveFinished(callId: callId, appliedTag: false)
 				return
 			}

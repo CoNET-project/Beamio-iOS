@@ -68,6 +68,25 @@ enum BeamioCallTiming {
 /// message text: ids, stages and ok/fail only.
 enum BeamioQALog {
 	#if DEBUG || BEAMIO_QA
+	/// QA only: time from a shellRecord command's receipt to its reply, with status codes only.
+	/// Never logs values, record contents, keys or addresses. `error` is logged only when it is a closed
+	/// snake_case code (letters, digits, underscore, at most 40 characters); anything else is logged as "other".
+	static func shellRecordTiming(cmd: String, startedAt: CFAbsoluteTime, payload: [String: Any]) {
+		let ms = Int((CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+		let event = payload["event"] as? [String: Any]
+		let ok = (event?["ok"] as? Bool).map { $0 ? "true" : "false" } ?? "nil"
+		let code = ((event?["result"] as? [String: Any])?["code"] as? String) ?? "-"
+		var err = "-"
+		if let e = event?["error"] as? String {
+			let closed = e.range(of: "^[a-z0-9_]{1,40}$", options: .regularExpression) != nil
+			err = closed ? e : "other"
+		}
+		write("native timing cmd=\(cmd) ms=\(ms) ok=\(ok) code=\(code) error=\(err)")
+	}
+	#endif
+
+
+	#if DEBUG || BEAMIO_QA
 	private static let lock = NSLock()
 	private static let formatter: ISO8601DateFormatter = {
 		let f = ISO8601DateFormatter()

@@ -19,10 +19,11 @@ struct BeamioIncomingCallPayload: Equatable {
 	/// Primary identity line for glass / custom Incoming (`@beamioTag`).
 	/// Prefer looked-up / `displayName` tag over mismatch-only `claimedTag`.
 	/// Never treat app filler `"Beamio"` as a wallet identity.
+	/// v116 §135 (transitional): the primary line is the verified peer's short address; the self-reported tag is not
+	/// shown as identity and never replaces it.
 	var titleTag: String {
-		if let tag = Self.normalizedBeamioTag(displayName) { return tag }
-		if let tag = Self.normalizedBeamioTag(claimedTag) { return tag }
-		return ""
+		let peer = peerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+		return peer.isEmpty ? "" : BeamioIncomingAddressFormat.short(peer)
 	}
 
 	/// Wallet address for the EOA blue AddressCapsule (verified peer, else claimed).
@@ -57,7 +58,9 @@ enum BeamioIncomingAddressFormat {
 	/// `0x1234…5678` (first 6 + … + last 4), matching AddressCapsule.
 	static func short(_ address: String) -> String {
 		let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
-		guard trimmed.count > 10 else { return trimmed }
+		// Only a well-formed 0x + 40 hex address is shortened. Empty or malformed input yields "" so the caller falls
+		// back to its own label; it is never echoed back as if it were an identity.
+		guard trimmed.range(of: "^0x[0-9a-fA-F]{40}$", options: .regularExpression) != nil else { return "" }
 		let prefix = String(trimmed.prefix(6))
 		let suffix = String(trimmed.suffix(4))
 		return "\(prefix)…\(suffix)"
@@ -222,7 +225,7 @@ enum BeamioIncomingCallGlassHost {
 // MARK: - Address → @BeamioTag (exact match)
 
 enum BeamioTagAddressLookup {
-	/// The only host this request may use, over HTTPS (owner ruling 2026-11-17: search-users is on beamio.ca).
+	/// The only host this request may use, over HTTPS (per the project decision, search-users is on beamio.ca).
 	static let endpointHost = "beamio.ca"
 
 	/// Redirect rule for this request only: a redirect is followed only to https on `endpointHost`; anything else is
@@ -235,8 +238,16 @@ enum BeamioTagAddressLookup {
 	/// The session used only by this lookup. Other requests keep their own sessions; the global behaviour is unchanged.
 	static let session: URLSession = URLSession(configuration: .ephemeral, delegate: SearchUsersRedirectGuard(), delegateQueue: nil)
 
+	#if BEAMIO_TEST_HOOKS
+	/// Test-only stand-in for the network tag lookup (BEAMIO_TEST_HOOKS builds only; absent from release).
+	nonisolated(unsafe) static var testOverride: ((String) -> String?)?
+	#endif
+
 	/// Exact-address `search-users` → `@tag`. Failure returns nil (keep prior UI).
 	static func fetchExactTag(for address: String, session: URLSession = session, completion: @escaping (String?) -> Void) {
+		#if BEAMIO_TEST_HOOKS
+		if let testOverride { completion(testOverride(address)); return }
+		#endif
 		let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard trimmed.range(of: #"^0x[0-9a-fA-F]{40}$"#, options: .regularExpression) != nil else {
 			completion(nil)

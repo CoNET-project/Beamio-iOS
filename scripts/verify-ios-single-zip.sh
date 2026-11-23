@@ -24,6 +24,8 @@
 # Exit 0 = pass. Exit 1 = gate failed (reasons printed). Exit 2 = bad usage.
 
 set -euo pipefail
+# bash 3.2 safe argument check: a missing or empty value is a usage error (exit 2), never a silent pass.
+need_arg() { if [[ $# -lt 2 || -z "$2" ]]; then echo "error: $1 needs a value" >&2; exit 2; fi; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -57,13 +59,30 @@ is_zip_file() {
 }
 
 # Prints every ZIP under $1, one path per line (relative to $1).
+# fail-closed: any enumeration or read error counts as a FAIL. Output goes to stdout only for ZIP paths; the
+# failure is counted in this shell (no subshell), and the function returns non-zero.
 list_zips() {
-	local root="$1" f
+	local root="$1" f list errf rc
+	list="$(mktemp)"; errf="$(mktemp)"
+	find "$root" \( -type f -o -type l \) -print0 >"$list" 2>"$errf"; rc=$?
+	if [[ $rc -ne 0 || -s "$errf" ]]; then
+		FAILS=$((FAILS + 1))
+		echo "FAIL: cannot enumerate $root (find exit $rc): $(tr '\n' ' ' <"$errf" | head -c 300)" >&2
+		rm -f "$list" "$errf"; return 1
+	fi
+	rm -f "$errf"
 	while IFS= read -r -d '' f; do
-		if is_zip_file "$f"; then
-			printf '%s\n' "${f#"$root"/}"
+		if [[ -f "$f" && ! -L "$f" && ! -r "$f" ]]; then
+			FAILS=$((FAILS + 1)); echo "FAIL: unreadable file in $root: ${f#"$root"/}" >&2
+			rm -f "$list"; return 1
 		fi
-	done < <(find "$root" \( -type f -o -type l \) -print0)
+		if ! is_zip_file "$f"; then
+			continue
+		fi
+		printf '%s\n' "${f#"$root"/}"
+	done <"$list"
+	rm -f "$list"
+	return 0
 }
 
 # Checks content of one embedded ZIP. $1 = path, $2 = expected sha (may be empty), $3 = expected ver (may be empty)
@@ -108,7 +127,9 @@ check_zip_content() {
 check_tree() {
 	local dir="$1" label="$2" want_sha="$3" want_ver="$4" zips count
 	echo "== $label: $dir"
-	zips="$(list_zips "$dir")"
+	local tmpz; tmpz="$(mktemp)"
+	if ! list_zips "$dir" >"$tmpz"; then rm -f "$tmpz"; return; fi
+	zips="$(cat "$tmpz")"; rm -f "$tmpz"
 	count="$(printf '%s' "$zips" | grep -c . || true)"
 	info "ZIP files found: $count"
 	if [[ -n "$zips" ]]; then
@@ -150,9 +171,9 @@ VER=""
 ARTIFACTS=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-		--resources) RESOURCES="${2:?}"; shift 2 ;;
-		--sha256) SHA="${2:?}"; shift 2 ;;
-		--ver) VER="${2:?}"; shift 2 ;;
+		--resources) need_arg "$1" "${2-}"; RESOURCES="$2"; shift 2 ;;
+		--sha256) need_arg "$1" "${2-}"; SHA="$2"; shift 2 ;;
+		--ver) need_arg "$1" "${2-}"; VER="$2"; shift 2 ;;
 		-h | --help) usage ;;
 		--*) echo "unknown option $1" >&2; exit 2 ;;
 		*) ARTIFACTS+=("$1"); shift ;;
@@ -173,7 +194,7 @@ case "$MODE" in
 			echo "post mode needs --sha256, --ver and at least one artifact" >&2
 			exit 2
 		fi
-		for a in "${ARTIFACTS[@]}"; do
+		for a in ${ARTIFACTS[@]+"${ARTIFACTS[@]}"}; do
 			a="${a%/}"
 			case "$a" in
 				*.app)

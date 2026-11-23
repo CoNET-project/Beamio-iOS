@@ -40,14 +40,8 @@ enum BeamioNativeVoiceSignaling {
 	private static var acceptStarted: Set<String> = []
 	/// Callee calls whose CallKit audio session is active (media may start).
 	private static var calleeAudioReady: Set<String> = []
-	/// Callee: the four paid channels built while the call rang (memory only, nothing sent).
-	private static var preparedChannels: [String: (made: [BeamioVoiceV3.Own], at: Date)] = [:]
-	/// Callee: the accept for those channels, signed, encrypted and wrapped while the
-	/// call rang (memory only, nothing sent). Answer only posts it: with the app in
-	/// the background the SDK's crypto WebView did not answer until the app came to
-	/// the front, which held the accept back 3–7 s in RC3b.
-	private static var preparedAccepts: [String: (armor: String, at: Date)] = [:]
-	private static var preparing: Set<String> = []
+	/// Bound calls whose accept waits for the unlock (locked answer): callId -> sessionId.
+	private static var awaitingUnlockAccepts: [String: String] = [:]
 	private static var activeCall: ActiveCall?
 	/// Busy rejects: sent at once when the second call's offer is resolved (its
 	/// decrypt already loaded `BeamioOpenPgpHost`, which the dialer cancel also
@@ -66,7 +60,7 @@ enum BeamioNativeVoiceSignaling {
 	/// backlog then replays the earlier, already-cancelled offer; without the mark
 	/// that offer would ring CallKit again.
 	private static let remoteEndedKey = "beamio.voice.remoteEnded"
-	private static let remoteEndedTTL: TimeInterval = 600
+	private static let remoteEndedTTL: TimeInterval = 1200
 
 	/// Caller holds `lock`.
 	private static func loadRemoteEnded(now: Date) -> [String: TimeInterval] {
@@ -125,6 +119,7 @@ enum BeamioNativeVoiceSignaling {
 	#endif
 
 	private static func markRemoteEnded(callId: String, sessionId: String) {
+		markStrictEnded(callId: callId, sessionId: sessionId)
 		lock.lock()
 		let now = Date()
 		var map = loadRemoteEnded(now: now)
@@ -139,7 +134,7 @@ enum BeamioNativeVoiceSignaling {
 	/// call again seconds later; that must not ring a call that is over.
 	/// Persisted so a relaunch (or a cold start from a push) still knows.
 	private static let locallyEndedKey = "beamio.voice.locallyEnded"
-	private static let locallyEndedTTL: TimeInterval = 600
+	private static let locallyEndedTTL: TimeInterval = 1200
 
 	/// Caller holds `lock`.
 	private static func loadLocallyEnded(now: Date) -> [String: TimeInterval] {
@@ -149,6 +144,7 @@ enum BeamioNativeVoiceSignaling {
 	}
 
 	static func markLocallyEnded(callId: String, sessionId: String) {
+		markStrictEnded(callId: callId, sessionId: sessionId)
 		lock.lock()
 		let now = Date()
 		var map = loadLocallyEnded(now: now)
@@ -156,6 +152,42 @@ enum BeamioNativeVoiceSignaling {
 		if !sessionId.isEmpty { map[sessionId] = now.timeIntervalSince1970 }
 		UserDefaults.standard.set(map, forKey: locallyEndedKey)
 		lock.unlock()
+	}
+
+	/// Strict composite-key ended record: key JSON.stringify([callId, sessionId]), written only when both ids are
+	/// non-empty. It can only add drops: the existing dual-key checks stay the rule for everything else.
+	private static let strictEndedKey = "beamio.voice.strictEnded"
+	private static let strictEndedTTL: TimeInterval = 1200
+
+	static func strictEndedKeyString(callId: String, sessionId: String) -> String? {
+		let c = callId.trimmingCharacters(in: .whitespacesAndNewlines)
+		let s = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard !c.isEmpty, !s.isEmpty else { return nil }
+		func q(_ v: String) -> String {
+			"\"" + v.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+		}
+		return "[" + q(c) + "," + q(s) + "]"
+	}
+
+	static func markStrictEnded(callId: String, sessionId: String) {
+		guard let key = strictEndedKeyString(callId: callId, sessionId: sessionId) else { return }
+		lock.lock()
+		defer { lock.unlock() }
+		let now = Date().timeIntervalSince1970
+		var map = (UserDefaults.standard.dictionary(forKey: strictEndedKey) as? [String: TimeInterval] ?? [:])
+		map = map.filter { now - $0.value <= strictEndedTTL }
+		map[key] = now
+		UserDefaults.standard.set(map, forKey: strictEndedKey)
+	}
+
+	/// True when the strict composite key was ended within its window. Never true for an empty sessionId.
+	static func wasStrictEnded(callId: String, sessionId: String) -> Bool {
+		guard let key = strictEndedKeyString(callId: callId, sessionId: sessionId) else { return false }
+		lock.lock()
+		defer { lock.unlock() }
+		let now = Date().timeIntervalSince1970
+		guard let t = (UserDefaults.standard.dictionary(forKey: strictEndedKey) as? [String: TimeInterval])?[key] else { return false }
+		return now - t <= strictEndedTTL
 	}
 
 	static func wasLocallyEnded(callId: String, sessionId: String) -> Bool {
@@ -182,6 +214,8 @@ enum BeamioNativeVoiceSignaling {
 		let now = Date()
 		incomingRingStarted = incomingRingStarted.filter { now.timeIntervalSince($0.value) < 600 }
 		if incomingRingStarted[callId] == nil { incomingRingStarted[callId] = now }
+		callKitReportedAtMap = callKitReportedAtMap.filter { now.timeIntervalSince($0.value) < 7 * 24 * 3600 }
+		if callKitReportedAtMap[callId] == nil { callKitReportedAtMap[callId] = now }
 		lock.unlock()
 	}
 
@@ -221,128 +255,7 @@ enum BeamioNativeVoiceSignaling {
 		return (!callId.isEmpty && map[callId] != nil) || (!sessionId.isEmpty && map[sessionId] != nil)
 	}
 
-	/// AES-relay `voice_end_v1` from the peer (browser Hang Up). Marks remote-ended
-	/// so we do not bounce a hangup back, then tears CallKit + InCall.
-	static func applyRemoteMediaEnd(callId: String, sessionId: String) {
-		let cid = callId.trimmingCharacters(in: .whitespacesAndNewlines)
-		let sid = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
-		guard !cid.isEmpty || !sid.isEmpty else { return }
-		markRemoteEnded(callId: cid, sessionId: sid)
-		let callKit = BeamioVoipIncomingBootstrap.shared.callKit
-		let pushAlias = callKit.lastReportedCallId
-		// v83: only alias-mark/end when PushKit id is the same live call.
-		let aliasLive = !pushAlias.isEmpty && pushAlias != cid
-			&& callKit.cancelAliasesLastReported(callId: cid, sessionId: sid)
-		if aliasLive {
-			markRemoteEnded(callId: pushAlias, sessionId: sid)
-		}
-		qaTrail("aes remote end callId=\(cid.prefix(8)) alias=\(aliasLive ? pushAlias.prefix(8) : "-")")
-		NSLog("[BeamioNativeVoice] AES peer ended callId=%@", cid)
-		let end = {
-			callKit.end(callId: cid, sessionId: sid)
-			if aliasLive {
-				callKit.end(callId: pushAlias, sessionId: sid)
-			}
-		}
-		if Thread.isMainThread {
-			end()
-		} else {
-			DispatchQueue.main.async(execute: end)
-		}
-	}
 
-	/// Every inbound Chat message passes through the shell before it reaches the
-	/// page, already decrypted and with its EIP-191 signer recovered (`from`). Act on
-	/// a caller's cancel or hang-up here, natively: the page may not be running yet
-	/// (killed or suspended app woken by a call push), and then nothing else would
-	/// ever clear the ringing CallKit call.
-	///
-	/// Also paint `@BeamioTag` from a live `voice_call_offer_v1` chat line — VoIP
-	/// first-report is opaque `"Beamio"`, and `voice_offer_fetch` often misses while
-	/// the offer still arrives as a normal chat message.
-	///
-	/// `payload` is the bridge object the chat module emits (`chatModuleEvent`).
-	/// A verified peer `voice_end_v1` / `voice_call_timeout_v1` that arrived as a
-	/// Chat message (recognised by the chat module, page or not): end the matching call.
-	static func applyPeerCallControl(type: String, callId: String, sessionId: String, from rawFrom: String) {
-		let from = rawFrom.lowercased()
-		let signal = (type: type, callId: callId, sessionId: sessionId)
-
-		qaTrail("caller end signal type=\(signal.type) callId=\(signal.callId.prefix(8))")
-		// The recovered signer must be the other party of this call: the caller on
-		// a call we got, the callee on a call we dialed (our dial's cached offer has
-		// callerEoa = us). Without a cached offer the secret callId is the only check.
-		if let offer = cachedOffer(callId: signal.callId, sessionId: signal.sessionId),
-		   !BeamioCallControlSigner.allowed(
-		   	from: from,
-		   	callerEoa: offer.callerEoa,
-		   	calleeEoa: offer.to,
-		   	localEoa: BeamioChatPgpKeychain.load()?.eoa ?? ""
-		   )
-		{
-			NSLog("[BeamioNativeVoice] end ignored — signer is not the peer callId=%@", signal.callId)
-			qaTrail("peer end ignored: signer is not the peer callId=\(signal.callId.prefix(8))")
-			return
-		}
-		let callKit = BeamioVoipIncomingBootstrap.shared.callKit
-		let pushAlias = callKit.lastReportedCallId
-		let aliasLive = !pushAlias.isEmpty && pushAlias != signal.callId
-			&& callKit.cancelAliasesLastReported(
-				callId: signal.callId,
-				sessionId: signal.sessionId
-			)
-		// v83: historyLoad may replay an old voice_end while a newer CallKit
-		// ring is live. Do not mark/end the live PushKit alias for that stale id.
-		// Our own live dial is never stale (the PushKit alias belongs to incoming calls).
-		let endsOurDial: Bool = {
-			lock.lock()
-			defer { lock.unlock() }
-			guard let cur = activeCall, cur.role == .dialer else { return false }
-			return cur.offer.callId == signal.callId
-				|| (!signal.sessionId.isEmpty && cur.offer.sessionId == signal.sessionId)
-		}()
-		if !endsOurDial,
-		   callKit.hasLiveCallKitCall(),
-		   !pushAlias.isEmpty,
-		   signal.callId != pushAlias,
-		   !aliasLive
-		{
-			qaTrail(
-				"stale end ignored live=\(pushAlias.prefix(8)) end=\(signal.callId.prefix(8)) type=\(signal.type)"
-			)
-			NSLog(
-				"[BeamioNativeVoice] stale end ignored — live=%@ end=%@ type=%@",
-				pushAlias,
-				signal.callId,
-				signal.type
-			)
-			callKit.writeBusyQaBreadcrumb(
-				"stale-end-ignored:live=\(pushAlias):end=\(signal.callId):type=\(signal.type)"
-			)
-			// Still remember that call as over: its offer can arrive after
-			// this end (mailbox backlog on a cold listen) and must not ring.
-			markRemoteEnded(callId: signal.callId, sessionId: signal.sessionId)
-			return
-		}
-		markRemoteEnded(callId: signal.callId, sessionId: signal.sessionId)
-		if aliasLive {
-			markRemoteEnded(callId: pushAlias, sessionId: signal.sessionId)
-		}
-		NSLog("[BeamioNativeVoice] caller ended callId=%@ type=%@", signal.callId, signal.type)
-		DispatchQueue.main.async {
-			callKit.end(
-				callId: signal.callId,
-				sessionId: signal.sessionId
-			)
-			if aliasLive {
-				callKit.end(
-					callId: pushAlias,
-					sessionId: signal.sessionId
-				)
-			}
-		}
-		return
-	}
 
 	static func observeChatEvent(_ payload: [String: Any]) {
 		guard payload["action"] as? String == "chatModuleEvent",
@@ -359,8 +272,31 @@ enum BeamioNativeVoiceSignaling {
 		else { return }
 		qaTrail("chat message from=…\(from.suffix(6)) len=\(line.count)")
 
+		// v68 §75 / v69 §76: a voice_ chat line drives no call action until its outer envelope is verified
+		// (outer EIP-191 signer == envelope.from == line sender == inner from). Unverified: dropped silently.
+		if line.contains("voice_") {
+			VoiceLineVerifier.verify(line: line, lineFrom: from) { verified in
+				guard verified else {
+					qaTrail("voice line dropped: not verified")
+					return
+				}
+				// Strict ended record (only adds drops): a call ended under this exact {callId, sessionId} stays ended.
+				if let id = VoiceLineVerifier.innerIdentity(line),
+				   wasStrictEnded(callId: id.callId, sessionId: id.sessionId) {
+					qaTrail("voice line dropped: call already ended (strict key)")
+					return
+				}
+				handleVerifiedChatLine(line: line, from: from)
+			}
+			return
+		}
+		handleVerifiedChatLine(line: line, from: from)
+	}
+
+	/// The chat-line handling for a line whose voice signals (if any) are verified.
+	static func handleVerifiedChatLine(line: String, from: String) {
 		// Call control (caller cancel / hang-up) is recognised by the chat module
-		// and arrives through `applyPeerCallControl`.
+		// (v72: the SDK peer-control hook is not attached; the chat path above is the only driver.)
 		if endSignal(in: line) != nil { return }
 
 		// v3 dialer: the callee's device is ringing (wake receipt).
@@ -430,13 +366,11 @@ enum BeamioNativeVoiceSignaling {
 				}
 				sendRingingIfNeeded(resolved)
 				if pushAlias.isEmpty, !liveSame {
+					// v116 §135 (transitional): the name is the verified from's short address. The self-reported tag never
+					// names the caller here (no tag is shown as identity; the claimed tag is not a display name).
 					let display: String = {
-						let t = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-						if !t.isEmpty {
-							return t.hasPrefix("@") ? t : "@\(t)"
-						}
-						if !short.isEmpty { return short }
-						return "Beamio call"
+						let verifiedShort = BeamioIncomingAddressFormat.short(resolved.callerEoa)
+						return verifiedShort.isEmpty ? "Beamio call" : verifiedShort
 					}()
 					qaTrail(
 						"chat offer empty-push → soft CallKit report callId=\(resolved.callId.prefix(8))"
@@ -515,6 +449,90 @@ enum BeamioNativeVoiceSignaling {
 		return (type: hit.0, callId: hit.1, sessionId: hit.2)
 	}
 
+	/// Whether a call is still live on this device (not ended by the remote side or locally). A late-arriving offer may only be
+	/// applied to a live call. Test hook: `liveOverrideForTests` (BEAMIO_TEST_HOOKS builds only; not in release).
+	/// How long a call stays live after CallKit first reported it. An offer that arrives later than this is for an ended call.
+	static let lateOfferCallTTLSeconds: TimeInterval = 600
+
+	/// Whether a call is still live, for applying a late-arriving offer (fail closed):
+	/// 1. an end marker (remote or local) means ended; a marker past its own TTL has already been dropped by its store;
+	/// 2. a call CallKit reported and no longer holds is ended;
+	/// 3. a call older than `lateOfferCallTTLSeconds` since its first CallKit report is ended, so an expired marker cannot revive it;
+	/// 4. a call CallKit never reported is live (an offer may arrive before CallKit reports the call).
+	static func isCallStillLive(callId: String, sessionId: String) -> Bool {
+#if BEAMIO_TEST_HOOKS
+		if let override = liveOverrideForTests { return override(callId, sessionId) }
+#endif
+		if wasRemoteEnded(callId: callId, sessionId: sessionId) || wasLocallyEnded(callId: callId, sessionId: sessionId) {
+			return false
+		}
+		guard let reported = callKitReportedAt(callId: callId) else { return true }
+		if !callKitHasCall(callId: callId) { return false }
+		return Date().timeIntervalSince(reported) <= lateOfferCallTTLSeconds
+	}
+
+	/// First CallKit report time for a call (kept for the late-offer rule; pruned after a week).
+	private static var callKitReportedAtMap: [String: Date] = [:]
+
+	static func callKitReportedAt(callId: String) -> Date? {
+		lock.lock()
+		defer { lock.unlock() }
+		return callKitReportedAtMap[callId]
+	}
+
+	/// Whether CallKit holds the call now. The test hook answers instead of the bootstrap.
+	private static func callKitHasCall(callId: String) -> Bool {
+#if BEAMIO_TEST_HOOKS
+		if let present = callKitPresentForTests { return present(callId) }
+#endif
+		return BeamioVoipIncomingBootstrap.shared.callKit.callKitHasCall(callId: callId)
+	}
+
+#if BEAMIO_TEST_HOOKS
+	/// Test-only: answers whether CallKit holds the call (the bootstrap is not touched by tests). nil restores the real check.
+	static var callKitPresentForTests: ((String) -> Bool)?
+
+	/// Test-only: sets the first CallKit report time of a call, to exercise the TTL rule.
+	static func setCallKitReportedAtForTests(callId: String, at: Date?) {
+		lock.lock()
+		defer { lock.unlock() }
+		callKitReportedAtMap[callId] = at
+	}
+#endif
+
+#if BEAMIO_TEST_HOOKS
+	/// Test-only: answers `isCallStillLive` instead of the ended-call records. nil restores the real check.
+	static var liveOverrideForTests: ((String, String) -> Bool)?
+#endif
+
+	/// The decision for an offer that arrives late (after the caller gave up or after the call ended): it is applied (cached,
+	/// rung, shown) only when it is answerable and its call is still live. Pure given `isCallStillLive`.
+	static func shouldApplyLateOffer(_ offer: BeamioVoiceOfferIdentity.Resolved, callId: String, sessionId: String) -> Bool {
+		offer.answerable && BeamioVoiceOfferIdentity.withinSignedExpiry(offer) && isCallStillLive(callId: callId, sessionId: sessionId)
+	}
+
+	/// Holds the result of one offer wait. The callback writes only while the wait is open; after the wait is abandoned
+	/// (timeout), a late result is dropped, so no thread reads or writes the value without the lock.
+	final class OfferWaitBox {
+		private let lock = NSLock()
+		private var abandoned = false
+		private var value: BeamioVoiceOfferIdentity.Resolved?
+
+		func deliver(_ resolved: BeamioVoiceOfferIdentity.Resolved?) {
+			lock.lock()
+			defer { lock.unlock() }
+			if !abandoned { value = resolved }
+		}
+
+		/// Ends the wait and returns the value delivered so far (nil if none). Any later delivery is dropped.
+		func finish() -> BeamioVoiceOfferIdentity.Resolved? {
+			lock.lock()
+			defer { lock.unlock() }
+			abandoned = true
+			return value
+		}
+	}
+
 	static func rememberOffer(_ incoming: BeamioVoiceOfferIdentity.Resolved) {
 		guard !incoming.callId.isEmpty else { return }
 		lock.lock()
@@ -546,90 +564,6 @@ enum BeamioNativeVoiceSignaling {
 			}
 			return
 		}
-		if resolved.answerable { prepareAcceptChannels(resolved) }
-	}
-
-	/// Callee, while it rings: create the four paid channels, pick our relays and
-	/// sign + encrypt our first listens, all on this device. Nothing is sent before
-	/// Answer (the relays learn nothing, nothing is paid); declined or timed-out
-	/// calls just drop it from memory. Saves the crypto WebView work on Answer.
-	static func prepareAcceptChannels(_ offer: BeamioVoiceOfferIdentity.Resolved) {
-		let callId = offer.callId
-		// Frames and Hang Up go through this host: rebuild it now if iOS ended it.
-		BeamioVoiceRoutePgp.shared.ensureAlive(reason: "incoming ring")
-		lock.lock()
-		let now = Date()
-		for (id, entry) in preparedChannels where now.timeIntervalSince(entry.at) > 300 {
-			preparedChannels.removeValue(forKey: id)
-			BeamioVoiceV3.PreparedListens.drop(sids: entry.made.map(\.channel.sid))
-		}
-		for (id, entry) in preparedAccepts where now.timeIntervalSince(entry.at) > PreparedAcceptRule.maxAgeSeconds {
-			preparedAccepts.removeValue(forKey: id)
-		}
-		let skip = preparing.contains(callId) || preparedChannels[callId] != nil || acceptStarted.contains(callId)
-		if !skip { preparing.insert(callId) }
-		lock.unlock()
-		if skip { return }
-		DispatchQueue.global(qos: .userInitiated).async {
-			defer { lock.lock(); preparing.remove(callId); lock.unlock() }
-			guard let secrets = BeamioChatPgpKeychain.load() else { return }
-			let localEoa = secrets.eoa.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-			guard let wallet = BeamioChatWalletKeychain.load(), wallet.eoa.lowercased() == localEoa else { return }
-			let started = Date()
-			var made: [BeamioVoiceV3.Own] = []
-			for _ in 0 ..< 4 {
-				guard let own = BeamioVoiceV3.newPaidChannel(payerKeyHex: wallet.privateKeyHex, payerEoa: localEoa) else { return }
-				made.append(own)
-			}
-			var exclude: Set<String> = []
-			if let mailbox = BeamioSiCipherPost.normalizeIp(BeamioChatPgpKeychain.loadMailboxIp()) { exclude.insert(mailbox) }
-			let avoid = [BeamioChatPgpKeychain.loadRoutePublicArmor(), offer.callerRouteArmored]
-			guard let voiceRelay = BeamioVoiceV3.RelayNodes.pick(excludeIps: exclude, excludeArmors: avoid),
-			      let videoRelay = BeamioVoiceV3.RelayNodes.pick(excludeIps: exclude, excludeArmors: avoid)
-			else { return }
-			made[2].relay = voiceRelay
-			made[3].relay = videoRelay
-			lock.lock()
-			let answered = acceptStarted.contains(callId)
-			lock.unlock()
-			if answered { return }  // Answer came first: sendAcceptV3 builds its own.
-			BeamioVoiceV3.PreparedListens.prepare(made[2])
-			BeamioVoiceV3.PreparedListens.prepare(made[3])
-			lock.lock()
-			preparedChannels[callId] = (made, Date())
-			lock.unlock()
-			qaTrail("v3 accept channels prepared while ringing callId=\(callId.prefix(8)) ms=\(Int(Date().timeIntervalSince(started) * 1000))")
-			// The accept itself, sealed now while the crypto WebView still answers.
-			let sealStarted = Date()
-			guard let text = acceptText(offer: offer, localEoa: localEoa, made: made),
-			      let armor = BeamioVoiceV3.sealChatMessage(
-			      	text: text, localEoa: localEoa,
-			      	peerUserPgp: offer.callerPgpArmored, peerRoute: offer.callerRouteArmored, noPush: true
-			      )
-			else {
-				qaTrail("v3 accept seal while ringing failed callId=\(callId.prefix(8))")
-				return
-			}
-			lock.lock()
-			// Answer came first and took the channels: it sealed its own accept.
-			let stillPrepared = preparedChannels[callId] != nil && !acceptStarted.contains(callId)
-			if stillPrepared { preparedAccepts[callId] = (armor, Date()) }
-			lock.unlock()
-			if stillPrepared {
-				qaTrail("v3 accept sealed while ringing callId=\(callId.prefix(8)) ms=\(Int(Date().timeIntervalSince(sealStarted) * 1000))")
-			}
-		}
-	}
-
-	/// The channels prepared for `callId` while it rang (once), with the accept
-	/// sealed for them if it is still fresh, or nil.
-	private static func takePreparedChannels(_ callId: String) -> (made: [BeamioVoiceV3.Own], acceptArmor: String?)? {
-		lock.lock()
-		defer { lock.unlock() }
-		let accept = preparedAccepts.removeValue(forKey: callId)
-		guard let entry = preparedChannels.removeValue(forKey: callId), Date().timeIntervalSince(entry.at) < 300 else { return nil }
-		let fresh = accept.flatMap { PreparedAcceptRule.usable(sealedAt: $0.at, now: Date()) ? $0.armor : nil }
-		return (entry.made, fresh)
 	}
 
 	/// The v3 accept for the callee's four channels (cv, cV, ev, eV), as JSON text.
@@ -680,7 +614,7 @@ enum BeamioNativeVoiceSignaling {
 		if !callId.isEmpty { cacheByCallId.removeValue(forKey: callId) }
 		if !sessionId.isEmpty { cacheByCallId.removeValue(forKey: sessionId) }
 		if activeCall?.offer.callId == callId || activeCall?.offer.sessionId == sessionId {
-			activeCall = nil
+			wipeAndClearActiveCall()
 			dialerCancel = nil
 			dialerTimeout = nil
 		}
@@ -700,12 +634,22 @@ enum BeamioNativeVoiceSignaling {
 		lock.unlock()
 	}
 
+	/// Ends the active call: zeroes its channel keys (T) first, then drops the call. Keys are memory only.
+	private static func wipeAndClearActiveCall() {
+		if let call = activeCall, let v3 = call.v3 {
+			v3.ownVoice.tk.wipe()
+			v3.ownVideo.tk.wipe()
+			// The SDK holds this call's channel keys (T) in its own store: drop them with the call.
+			BeamioVoiceEphemeral.clearCall(sids: [v3.ownVoice.channel.sid, v3.ownVideo.channel.sid])
+		}
+		activeCall = nil
+	}
+
 	static func clearActiveCall() {
 		lock.lock()
-		activeCall = nil
+		wipeAndClearActiveCall()
 		dialerCancel = nil
 		dialerTimeout = nil
-		preparedHangup = nil
 		lock.unlock()
 		clearPendingDial()
 		flushBusyRejectsWhenIdle()
@@ -766,17 +710,6 @@ enum BeamioNativeVoiceSignaling {
 		defer { lock.unlock() }
 		guard let cur = activeCall, dialerCancelSpentCallId != callId else { return false }
 		return cur.role == .dialer && cur.offer.callId == callId && !cur.mediaEnabled
-	}
-
-	private static func prepareDialerCancel(callId: String, sessionId: String, localEoa: String, peerEoa: String, timeoutAtMs: Int) {
-		DispatchQueue.global(qos: .userInitiated).async {
-			let started = Date()
-			guard let target = makeDialerCancelTarget(
-				callId: callId, sessionId: sessionId, localEoa: localEoa, peerEoa: peerEoa, timeoutAtMs: timeoutAtMs
-			) else { return }
-			BeamioQALog.write("dialer cancel sealing callId=\(callId.prefix(8)) appState=\(appStateLabel())")
-			buildDialerCancel(target, copy: 1, started: started)
-		}
 	}
 
 	/// Callee keys and send exclusions for a dialer signal. Blocking (key lookup); off the main queue.
@@ -873,80 +806,9 @@ enum BeamioNativeVoiceSignaling {
 		}
 	}
 
-	/// Build one copy of the cancel, hold it if the call still rings, then schedule
-	/// the next copy. Stops once the call connects, ends or the cancel is posted.
-	/// A failed rebuild keeps the older copy. After the first copy, the timeout
-	/// message is built once.
-	private static func buildDialerCancel(_ target: DialerCancelTarget, copy: Int, started: Date) {
-		guard dialerCancelStillRinging(target.callId) else { return }
-		let callId = target.callId
-		func next() {
-			DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + dialerCancelRefreshSeconds) {
-				buildDialerCancel(target, copy: copy + 1, started: started)
-			}
-		}
-		let now = Int(Date().timeIntervalSince1970 * 1000)
-		sealDialerSignal(target, type: "voice_end_v1", stampMs: now) { armor in
-			guard let armor else {
-				if copy == 1 {
-					BeamioQALog.write("dialer cancel not prepared callId=\(callId.prefix(8))")
-				} else if dialerCancelStillRinging(callId) {
-					next()
-				}
-				return
-			}
-			lock.lock()
-			var stored = false
-			if let cur = activeCall, cur.role == .dialer, cur.offer.callId == callId, !cur.mediaEnabled,
-			   dialerCancelSpentCallId != callId
-			{
-				dialerCancel = DialerCancel(
-					callId: callId,
-					sessionId: target.sessionId,
-					armor: armor,
-					excludeIps: target.excludeIps,
-					signedAtMs: now,
-					copies: copy
-				)
-				stored = true
-			}
-			lock.unlock()
-			if copy == 1 {
-				BeamioQALog.write(
-					"dialer cancel prepared=\(stored ? "yes" : "no") callId=\(callId.prefix(8)) ms=\(Int(Date().timeIntervalSince(started) * 1000))"
-				)
-				if stored { prepareDialerTimeout(target) }
-			}
-			if stored { next() }
-		}
-	}
-
-	private static func prepareDialerTimeout(_ target: DialerCancelTarget) {
-		sealDialerSignal(target, type: "voice_call_timeout_v1", stampMs: target.timeoutAtMs) { armor in
-			lock.lock()
-			var stored = false
-			if let armor, let cur = activeCall, cur.role == .dialer, cur.offer.callId == target.callId,
-			   !cur.mediaEnabled, dialerCancelSpentCallId != target.callId
-			{
-				dialerTimeout = DialerCancel(
-					callId: target.callId,
-					sessionId: target.sessionId,
-					armor: armor,
-					excludeIps: target.excludeIps,
-					signedAtMs: target.timeoutAtMs,
-					copies: 1
-				)
-				stored = true
-			}
-			lock.unlock()
-			BeamioQALog.write("dialer timeout prepared=\(stored ? "yes" : "no") callId=\(target.callId.prefix(8))")
-		}
-	}
-
-	/// The ring window of our outgoing call ended unanswered: tell the callee
-	/// (`voice_call_timeout_v1`, signed at dial), then close the call as timed out
-	/// (`dialerDidReceiveReject` tells the page `callTimedOut`, which records
-	/// `timed_out` without sending its own). Answer, reject or hang-up already
+	/// The ring window of our outgoing call ended unanswered: close the call as timed out locally. No uplink is sent
+	/// (v67 §74: no voice_call_timeout_v1; the callee expires the ring by expiresAt), then `dialerDidReceiveReject` tells
+	/// the page `callTimedOut`, which records `timed_out` without sending its own. Answer, reject or hang-up already
 	/// changed the call, so a late timer does nothing.
 	private static func dialerRingWindowEnded(callId: String) {
 		guard dialerCancelStillRinging(callId) else { return }
@@ -997,76 +859,6 @@ enum BeamioNativeVoiceSignaling {
 		dialerDidReceiveReject(action: "callTimedOut")
 	}
 
-	/// CallKit End of our outgoing call. When the callee has not answered and the
-	/// cancel is ready, post it now and return true. The page is told
-	/// (`dialerCancelPosting`, then `dialerCancelSent` / `dialerCancelFailed`) and
-	/// does not send its own. Call before `clearActiveCall()`.
-	@discardableResult
-	static func postDialerCancelIfRinging(callId: String) -> Bool {
-		lock.lock()
-		guard let cancel = dialerCancel,
-		      cancel.callId == callId,
-		      let cur = activeCall,
-		      cur.role == .dialer,
-		      cur.offer.callId == cancel.callId,
-		      !cur.mediaEnabled
-		else {
-			lock.unlock()
-			return false
-		}
-		dialerCancel = nil
-		dialerTimeout = nil
-		dialerCancelSpentCallId = cancel.callId
-		lock.unlock()
-		clearPendingDial(callId: cancel.callId)
-		let ageMs = Int(Date().timeIntervalSince1970 * 1000) - cancel.signedAtMs
-
-		let bridge = BeamioVoipIncomingBootstrap.shared
-		bridge.emitToWeb("dialerCancelPosting", callId: cancel.callId, sessionId: cancel.sessionId)
-		var bgTask = UIBackgroundTaskIdentifier.invalid
-		bgTask = UIApplication.shared.beginBackgroundTask(withName: "beamio.voice.dialer-cancel") {
-			if bgTask != .invalid {
-				UIApplication.shared.endBackgroundTask(bgTask)
-				bgTask = .invalid
-			}
-		}
-		DispatchQueue.global(qos: .userInitiated).async {
-			let started = Date()
-			// Warm entry, straight POST; a second entry joins if the first is slow.
-			var result = BeamioSiCipherPost.post(
-				armor: cancel.armor,
-				nodes: BeamioChatPgpKeychain.loadSiNodes(),
-				excludeIps: cancel.excludeIps,
-				maxAttempts: 4,
-				timeout: 6,
-				hedgeAfter: 0.6
-			)
-			if !result.ok {
-				result = BeamioSiCipherPost.post(
-					armor: cancel.armor,
-					nodes: BeamioChatPgpKeychain.loadSiNodes(),
-					excludeIps: cancel.excludeIps
-				)
-			}
-			let ms = Int(Date().timeIntervalSince(started) * 1000)
-			BeamioQALog.write(
-				"dialer cancel posted callId=\(cancel.callId.prefix(8)) ok=\(result.ok ? "yes" : "no") ms=\(ms) signedAgoMs=\(ageMs) copies=\(cancel.copies)"
-			)
-			NSLog("[BeamioNativeVoice] dialer cancel posted ok=%@ ms=%d", result.ok ? "yes" : "no", ms)
-			DispatchQueue.main.async {
-				bridge.emitToWeb(
-					result.ok ? "dialerCancelSent" : "dialerCancelFailed",
-					callId: cancel.callId,
-					sessionId: cancel.sessionId
-				)
-				if bgTask != .invalid {
-					UIApplication.shared.endBackgroundTask(bgTask)
-					bgTask = .invalid
-				}
-			}
-		}
-		return true
-	}
 
 	/// Mailbox `voice_listen` accepts `[0-9a-fA-F-]{16,64}` — 32 hex chars.
 	static func randomMailboxVoiceSessionId() -> String {
@@ -1102,7 +894,7 @@ enum BeamioNativeVoiceSignaling {
 		}
 		guard !trimmedSession.isEmpty else { return failed("no-session") }
 		guard peer.hasPrefix("0x"), peer.count == 42 else { return failed("bad-peer") }
-		guard let secrets = BeamioChatPgpKeychain.load() else { return failed("no-chat-keys") }
+		guard let secrets = BeamioChatPgpKeychain.load(eoa: BeamioNativeAccountPointer.get()) else { return failed("no-chat-keys") }
 		let localEoa = secrets.eoa.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 		guard localEoa.hasPrefix("0x"), localEoa.count == 42 else { return failed("no-local-eoa") }
 		let offer = BeamioVoiceOfferIdentity.Resolved(
@@ -1152,9 +944,7 @@ enum BeamioNativeVoiceSignaling {
 		let attachedAt = Int(Date().timeIntervalSince1970 * 1000)
 		let createdAt = (1 ... attachedAt).contains(offerCreatedAtMs) ? offerCreatedAtMs : attachedAt
 		let timeoutAtMs = createdAt + Int(ringWindowMs)
-		prepareDialerCancel(
-			callId: offer.callId, sessionId: trimmedSession, localEoa: localEoa, peerEoa: peer, timeoutAtMs: timeoutAtMs
-		)
+		// v64 §71: no shell cancel uplink (voice_end_v1 for a ringing dial is the page's only). The callee expires by expiresAt.
 		let dialCallId = offer.callId
 		// Off the main queue: a busy main thread (UI work) must not push the
 		// timeout past the callee's own 60 s backup. The UI part hops to main itself.
@@ -1219,10 +1009,9 @@ enum BeamioNativeVoiceSignaling {
 			BeamioQALog.write("dialer start failed callId=\(callId.prefix(8)) reason=\(reason) (no ringing dial)")
 			return
 		}
-		let posted = postDialerCancelIfRinging(callId: callId)
 		lock.lock()
 		if activeCall?.offer.callId == callId {
-			activeCall = nil
+			wipeAndClearActiveCall()
 			dialerCancel = nil
 			dialerTimeout = nil
 		}
@@ -1230,7 +1019,7 @@ enum BeamioNativeVoiceSignaling {
 		lock.unlock()
 		clearPendingDial(callId: callId)
 		BeamioQALog.write(
-			"dialer start failed callId=\(callId.prefix(8)) reason=\(reason) cancel=\(posted ? "native" : "page") appState=\(appStateLabel())"
+			"dialer start failed callId=\(callId.prefix(8)) reason=\(reason) cancel=none appState=\(appStateLabel())"
 		)
 		BeamioNativeVoiceChannel.shared.stop()
 		BeamioCallTonePlayer.shared.stopRingback(reason: "dial-failed")
@@ -1312,47 +1101,8 @@ enum BeamioNativeVoiceSignaling {
 			return
 		}
 		BeamioQALog.write("dialer relaunch: dial callId=\(callId.prefix(8)) died while ringing; cancel (windowLeftMs=\(timeoutAtMs - nowMs))")
-		func attempt() {
-			let now = Int(Date().timeIntervalSince1970 * 1000)
-			guard now < timeoutAtMs - 1_000 else {
-				BeamioQALog.write("dialer relaunch cancel not sent callId=\(callId.prefix(8)): window over before signer ready")
-				return
-			}
-			guard BeamioConetChatSignBroker.hasLocalSigner(),
-			      let secrets = BeamioChatPgpKeychain.load()
-			else {
-				DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { attempt() }
-				return
-			}
-			let localEoa = secrets.eoa.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-			guard localEoa.hasPrefix("0x"), localEoa.count == 42,
-			      let target = makeDialerCancelTarget(
-			      	callId: callId, sessionId: sessionId, localEoa: localEoa, peerEoa: peer, timeoutAtMs: timeoutAtMs
-			      )
-			else {
-				BeamioQALog.write("dialer relaunch cancel not sent callId=\(callId.prefix(8)): callee keys")
-				return
-			}
-			sealDialerSignal(target, type: "voice_end_v1", stampMs: now, requireRinging: false) { armor in
-				guard let armor else {
-					BeamioQALog.write("dialer relaunch cancel not sent callId=\(callId.prefix(8)): seal failed")
-					return
-				}
-				let started = Date()
-				let result = BeamioSiCipherPost.post(
-					armor: armor,
-					nodes: BeamioChatPgpKeychain.loadSiNodes(),
-					excludeIps: target.excludeIps,
-					maxAttempts: 4,
-					timeout: 6,
-					hedgeAfter: 0.6
-				)
-				BeamioQALog.write(
-					"dialer relaunch cancel posted callId=\(callId.prefix(8)) ok=\(result.ok ? "yes" : "no") ms=\(Int(Date().timeIntervalSince(started) * 1000))"
-				)
-			}
-		}
-		DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { attempt() }
+		// v64 §71: no relaunch cancel uplink. The callee expires the ring by expiresAt.
+		BeamioQALog.write("dialer relaunch: no cancel uplink callId=\(callId.prefix(8))")
 	}
 
 	// MARK: - Wake receipt (`voice_call_ringing_v1`)
@@ -1375,7 +1125,7 @@ enum BeamioNativeVoiceSignaling {
 		{
 			return
 		}
-		guard let secrets = BeamioChatPgpKeychain.load() else { return }
+		guard let secrets = BeamioChatPgpKeychain.load(eoa: BeamioNativeAccountPointer.get()) else { return }
 		let localEoa = secrets.eoa.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 		let caller = offer.callerEoa.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 		guard localEoa.hasPrefix("0x"), localEoa.count == 42, caller.hasPrefix("0x"), caller != localEoa else { return }
@@ -1453,20 +1203,19 @@ enum BeamioNativeVoiceSignaling {
 		let rang = peerRinging.contains(callId)
 		lock.unlock()
 		guard BeamioDialerReceiptRule.endsUnreachable(stillRinging: still, rang: rang) else { return }
-		let posted = postDialerCancelIfRinging(callId: callId)
 		lock.lock()
 		guard let cur = activeCall, cur.role == .dialer, cur.offer.callId == callId, !cur.mediaEnabled else {
 			lock.unlock()
 			return
 		}
 		let sessionId = cur.listenSessionId
-		activeCall = nil
+		wipeAndClearActiveCall()
 		dialerCancel = nil
 		dialerTimeout = nil
 		dialerCancelSpentCallId = callId
 		lock.unlock()
 		clearPendingDial(callId: callId)
-		qaTrail("dialer unreachable (no ringing receipt in \(Int(peerUnreachableMs / 1000)) s) callId=\(callId.prefix(8)) cancel=\(posted ? "native" : "page")")
+		qaTrail("dialer unreachable (no ringing receipt in \(Int(peerUnreachableMs / 1000)) s) callId=\(callId.prefix(8)) cancel=none")
 		NSLog("[BeamioNativeVoice] dialer callUnreachable callId=%@", callId)
 		BeamioNativeVoiceChannel.shared.stop()
 		BeamioVoipIncomingBootstrap.shared.emitToWeb("callUnreachable", callId: callId, sessionId: sessionId)
@@ -1505,74 +1254,8 @@ enum BeamioNativeVoiceSignaling {
 			activeCall = cur
 		}
 		lock.unlock()
-		prepareHangup(callId: callId)
 	}
 
-	// MARK: - Hang Up built ahead
-
-	/// Our Hang Up for the connected call, sealed and encrypted to the peer's
-	/// voice relay as soon as that relay is known. At Hang Up the shared route-PGP
-	/// WebView is still busy with queued media frames (measured 2.6 s before the
-	/// hang-up frame got its turn), so End posts this copy instead of encrypting.
-	/// Memory only; rebuilt when the peer's relay changes, dropped with the call.
-	private struct PreparedHangup {
-		var callId: String
-		var relayArmor: String
-		var armor: String
-	}
-	private static var preparedHangup: PreparedHangup?
-	private static var preparingHangupFor = ""
-
-	private static func hangupBody(_ call: ActiveCall) -> [String: Any] {
-		let nowMs = Int(Date().timeIntervalSince1970 * 1000)
-		return [
-			"type": "voice_end_v1",
-			"callId": call.offer.callId,
-			"sessionId": call.offer.sessionId,
-			"from": call.localEoa,
-			"to": call.peerEoa,
-			"reason": "hangup",
-			"createdAt": nowMs,
-			"timestamp": nowMs,
-		]
-	}
-
-	private static func prepareHangup(callId: String) {
-		lock.lock()
-		guard let call = activeCall, call.offer.callId == callId,
-		      let v3 = call.v3, let relayArmor = v3.peerVoice.relay?.armor, !relayArmor.isEmpty,
-		      v3.peerVoice.channel.locator != nil,
-		      preparedHangup?.callId != callId || preparedHangup?.relayArmor != relayArmor,
-		      preparingHangupFor != "\(callId)|\(relayArmor.hashValue)"
-		else {
-			lock.unlock()
-			return
-		}
-		let tag = "\(callId)|\(relayArmor.hashValue)"
-		preparingHangupFor = tag
-		lock.unlock()
-		DispatchQueue.global(qos: .utility).async {
-			let armor = BeamioNativeVoiceChannel.sealV3ControlArmor(hangupBody(call), call: v3, seq: 0)
-			lock.lock()
-			if preparingHangupFor == tag { preparingHangupFor = "" }
-			if let armor, activeCall?.offer.callId == callId,
-			   activeCall?.v3?.peerVoice.relay?.armor == relayArmor
-			{
-				preparedHangup = PreparedHangup(callId: callId, relayArmor: relayArmor, armor: armor)
-			}
-			lock.unlock()
-			BeamioQALog.write("hangup prepared callId=\(callId.prefix(8)) ok=\(armor != nil ? "yes" : "no")")
-		}
-	}
-
-	/// The ready Hang Up for this call, if it still matches the peer's relay.
-	private static func takePreparedHangup(callId: String, relayArmor: String) -> String? {
-		lock.lock()
-		defer { lock.unlock() }
-		guard let p = preparedHangup, p.callId == callId, p.relayArmor == relayArmor else { return nil }
-		preparedHangup = nil
-		return p.armor
-	}
 
 	/// v3 dialer: the callee's accept arrived on our mailbox (chat message, signer
 	/// recovered as `from`). Pick our relays, open our two channels, start media.
@@ -1608,7 +1291,7 @@ enum BeamioNativeVoiceSignaling {
 			var exclude: Set<String> = []
 			if let mailbox = BeamioSiCipherPost.normalizeIp(BeamioChatPgpKeychain.loadMailboxIp()) { exclude.insert(mailbox) }
 			let calleeRoute = BeamioAddressPgp.searchKey(address: cur.peerEoa)?.routePublicKeyArmored ?? ""
-			let avoid = [BeamioChatPgpKeychain.loadRoutePublicArmor(), calleeRoute]
+			let avoid = [BeamioChatPgpKeychain.loadRoutePublicArmor(eoa: BeamioNativeAccountPointer.get()), calleeRoute]
 			guard let voiceRelay = BeamioVoiceV3.RelayNodes.pick(excludeIps: exclude, excludeArmors: avoid),
 			      let videoRelay = BeamioVoiceV3.RelayNodes.pick(excludeIps: exclude, excludeArmors: avoid)
 			else {
@@ -1631,8 +1314,7 @@ enum BeamioNativeVoiceSignaling {
 			let snapshot = live
 			lock.unlock()
 			// The callee's relays came with its accept: build our Hang Up now.
-			prepareHangup(callId: callId)
-			NSLog("[BeamioNativeVoice] v3 dialer accept callId=%@", callId)
+				NSLog("[BeamioNativeVoice] v3 dialer accept callId=%@", callId)
 			BeamioNativeVoiceChannel.shared.start(active: snapshot)
 			DispatchQueue.main.async {
 				BeamioVoipIncomingBootstrap.shared.callKit.markOutgoingConnected(
@@ -1676,7 +1358,7 @@ enum BeamioNativeVoiceSignaling {
 		}
 		let callId = cur.offer.callId
 		let sessionId = cur.listenSessionId
-		activeCall = nil
+		wipeAndClearActiveCall()
 		dialerCancel = nil
 		dialerTimeout = nil
 		lock.unlock()
@@ -1701,7 +1383,8 @@ enum BeamioNativeVoiceSignaling {
 	/// rule: its `expiresAt` has passed, or it was created (`createdAt`, else
 	/// `timestamp`) more than the ring window plus 15 s ago. Seconds or ms.
 	/// Missing fields → false.
-	private static func offerRingWindowOver(line: String) -> Bool {
+	/// Whether an inbound offer line is past its ring window (signed expiry or the window since createdAt). Uses the offer clock.
+	static func offerRingWindowOver(line: String) -> Bool {
 		guard let offer = BeamioVoiceOfferIdentity.extractVoiceOffer(from: line) else { return false }
 		func ms(_ raw: Any?) -> Double {
 			let v: Double = (raw as? Double) ?? (raw as? NSNumber)?.doubleValue
@@ -1709,7 +1392,7 @@ enum BeamioNativeVoiceSignaling {
 			guard v > 0, v.isFinite else { return 0 }
 			return v < 100_000_000_000 ? v * 1000 : v
 		}
-		let now = Date().timeIntervalSince1970 * 1000
+		let now = BeamioVoiceOfferIdentity.nowMs()
 		let expires = ms(offer["expiresAt"])
 		if expires > 0, expires <= now { return true }
 		let created = ms(offer["createdAt"]) > 0 ? ms(offer["createdAt"]) : ms(offer["timestamp"])
@@ -1751,7 +1434,7 @@ enum BeamioNativeVoiceSignaling {
 		}
 		let callId = cur.offer.callId
 		let sessionId = cur.listenSessionId
-		activeCall = nil
+		wipeAndClearActiveCall()
 		dialerCancel = nil
 		dialerTimeout = nil
 		lock.unlock()
@@ -1911,7 +1594,13 @@ enum BeamioNativeVoiceSignaling {
 		offer: BeamioVoiceOfferIdentity.Resolved,
 		rejectReason: String
 	) {
-		guard let secrets = BeamioChatPgpKeychain.load() else {
+		// v67 §74: a timeout is never uplinked (no voice_call_timeout_v1); it is handled locally.
+		if rejectReason == "timeout" {
+			BeamioQALog.write("callee timeout: local only, no uplink callId=\(offer.callId.prefix(8))")
+			forgetOffer(callId: offer.callId, sessionId: offer.sessionId)
+			return
+		}
+		guard let secrets = BeamioChatPgpKeychain.load(eoa: BeamioNativeAccountPointer.get()) else {
 			NSLog("[BeamioNativeVoice] decline — missing Chat PGP secrets in Keychain")
 			return
 		}
@@ -1923,7 +1612,7 @@ enum BeamioNativeVoiceSignaling {
 		let nowMs = Int(Date().timeIntervalSince1970 * 1000)
 		let body: [String: Any] = [
 			// An unanswered ring is a timeout for the caller, not a Decline.
-			"type": rejectReason == "timeout" ? "voice_call_timeout_v1" : "voice_call_reject_v1",
+			"type": "voice_call_reject_v1",  // a timeout returns before this point (v67 §74): no timeout type is built
 			"callId": offer.callId,
 			"sessionId": offer.sessionId,
 			"from": localEoa,
@@ -1953,96 +1642,70 @@ enum BeamioNativeVoiceSignaling {
 
 	// MARK: - Hang Up
 
-	/// Hang Up of a connected call (either role): an AES `voice_end_v1` on the
-	/// peer's voice channel so its call screen ends. Without this the shell only closed its own
-	/// channel and a web peer kept showing "Voice call" for a call that was over.
-	///
-	/// Call before `BeamioNativeVoiceChannel.stop()` / `clearActiveCall()`: the
-	/// call is read here, synchronously, and the uplink then runs from that copy.
-	/// A call that was never connected (dialer still ringing, no peer session)
-	/// sends nothing; Decline already covers a callee that never answered.
+	/// Native hang up (v66 §73, v67 §74): the shell builds and sends no voice_end_v1. It reports the hang-up to the page
+	/// as `nativeCallHangup`; the page sends the one voice_end_v1. A page that is not running gets nothing (local end only).
 	static func sendHangup(callId: String) {
 		lock.lock()
 		let snapshot = activeCall
 		lock.unlock()
-		guard let call = snapshot,
-		      call.offer.callId == callId,
-		      call.mediaEnabled,
-		      let v3 = call.v3
-		else { return }
-
-		// Take the call's warm uplink entries now: `stop()` clears the route next.
-		let warmEntries = BeamioNativeVoiceChannel.shared.warmEntriesForControl()
-		let prepared = v3.peerVoice.relay.flatMap { takePreparedHangup(callId: callId, relayArmor: $0.armor) }
-		let started = Date()
-
-		// The app can be suspended right after CallKit ends the call.
-		var bgTask = UIBackgroundTaskIdentifier.invalid
-		bgTask = UIApplication.shared.beginBackgroundTask(withName: "beamio.voice.hangup") {
-			if bgTask != .invalid {
-				UIApplication.shared.endBackgroundTask(bgTask)
-				bgTask = .invalid
-			}
-		}
-		DispatchQueue.global(qos: .userInitiated).async {
-			defer {
-				DispatchQueue.main.async {
-					if bgTask != .invalid {
-						UIApplication.shared.endBackgroundTask(bgTask)
-						bgTask = .invalid
-					}
-				}
-			}
-			let ok: Bool
-			if let armor = prepared {
-				ok = BeamioNativeVoiceChannel.postV3ControlArmor(armor, call: v3, preferredEntries: warmEntries)
-			} else {
-				ok = BeamioNativeVoiceChannel.postV3Control(hangupBody(call), call: v3, preferredEntries: warmEntries)
-			}
-			BeamioQALog.write(
-				"hangup uplink callId=\(call.offer.callId.prefix(8)) ok=\(ok ? "yes" : "no") ms=\(Int(Date().timeIntervalSince(started) * 1000)) warm=\(warmEntries.count) prepared=\(prepared != nil ? "yes" : "no")"
-			)
-			NSLog(
-				"[BeamioNativeVoice] hangup uplink callId=%@ role=%@ ok=%@",
-				call.offer.callId,
-				call.role.rawValue,
-				ok ? "yes" : "no"
-			)
-			if !ok {
-				// The channel frame did not go (the peer's relay unknown, its channel
-				// gone, or our frame encryption failed): tell its mailbox instead.
-				let sent = postHangupToMailbox(call)
-				BeamioQALog.write("hangup mailbox fallback callId=\(call.offer.callId.prefix(8)) ok=\(sent ? "yes" : "no")")
-			}
-		}
-	}
-
-	/// `voice_end_v1` to the peer's mailbox (signed chat message, as Decline).
-	/// Callee: the caller's keys came in the offer; caller: the callee's keys
-	/// from the chain (the offer holds our own). Two tries. Blocking.
-	private static func postHangupToMailbox(_ call: ActiveCall) -> Bool {
-		let keys: (user: String, route: String)?
-		if call.role == .callee {
-			keys = (call.offer.callerPgpArmored, call.offer.callerRouteArmored)
-		} else {
-			keys = BeamioAddressPgp.searchKey(address: call.peerEoa).map { ($0.userPublicKeyArmored, $0.routePublicKeyArmored) }
-		}
-		guard let keys, keys.user.contains("BEGIN PGP PUBLIC KEY"), keys.route.contains("BEGIN PGP PUBLIC KEY"),
-		      let data = try? JSONSerialization.data(withJSONObject: hangupBody(call)),
-		      let text = String(data: data, encoding: .utf8)
-		else { return false }
-		for attempt in 0 ..< 2 {
-			if attempt > 0 { Thread.sleep(forTimeInterval: 0.6) }
-			if BeamioVoiceV3.postChatMessage(
-				text: text, localEoa: call.localEoa, peerUserPgp: keys.user, peerRoute: keys.route, noPush: true
-			) { return true }
-		}
-		return false
+		guard let call = snapshot, call.offer.callId == callId, call.mediaEnabled else { return }
+		BeamioQALog.write("native hangup reported callId=\(callId.prefix(8))")
+		BeamioVoipIncomingBootstrap.shared.emitNativeHangupIfPageRunning(callId: callId, sessionId: call.offer.sessionId)
 	}
 
 	/// CallKit Answer: voice v3 accept to the caller's mailbox; starts our channels.
 	/// `mediaDeferred`: sent at Answer, before CallKit activates the audio session;
 	/// capture starts in [calleeAudioActivated]. Network work does not wait for audio.
+	/// Strict bind for a tapped answer: the account must read
+	/// as a value; anything else, or a refused bind, is false (the caller ends the call).
+	static func bindAnsweredCall(callId: String) -> Bool {
+		guard case .value(let eoa) = BeamioNativeAccountPointer.read() else { return false }
+		return BeamioPasscodeSession.shared.bindIncomingCall(callId: callId, eoa: eoa)
+	}
+
+	/// The accept starts only when the SDK authorizes it. Locked: the
+	/// accept waits for the unlock (resumeAwaitingAccepts). Any other refusal ends the
+	/// call as cancelled. Nothing is signed here.
+	static func acceptWhenAuthorized(
+		callId: String,
+		sessionId: String,
+		mediaDeferred: Bool = true,
+		completion: ((String) -> Void)? = nil
+	) {
+		switch BeamioPasscodeSession.shared.incomingCallAuthorizeAnswer(callId: callId) {
+		case .allow:
+			lock.lock()
+			awaitingUnlockAccepts.removeValue(forKey: callId)
+			lock.unlock()
+			sendAccept(callId: callId, sessionId: sessionId, mediaDeferred: mediaDeferred, completion: completion)
+		case .deny:
+			// TEMPORARY FAIL-CLOSED: a locked answer ends as cancelled. The wait for
+			// the PWA entry unlock is re-enabled only after the entry and the T_load/T_in measurement land.
+			qaTrail("accept refused callId=\(callId.prefix(8)) cancelled (locked: temporary fail-closed)")
+			DispatchQueue.main.async {
+				BeamioVoipIncomingBootstrap.shared.callKit.end(callId: callId, sessionId: sessionId)
+			}
+			completion?("")
+		}
+	}
+
+	/// After a successful unlock: start the accepts that were waiting for it.
+	static func resumeAwaitingAccepts() {
+		lock.lock()
+		let waiting = awaitingUnlockAccepts
+		lock.unlock()
+		for (callId, sessionId) in waiting {
+			acceptWhenAuthorized(callId: callId, sessionId: sessionId)
+		}
+	}
+
+	/// The call ended: it no longer waits for an unlock.
+	static func dropAwaitingUnlock(callId: String) {
+		lock.lock()
+		awaitingUnlockAccepts.removeValue(forKey: callId)
+		lock.unlock()
+	}
+
 	static func sendAccept(
 		callId: String,
 		sessionId: String,
@@ -2107,7 +1770,7 @@ enum BeamioNativeVoiceSignaling {
 				}
 				return
 			}
-			guard let secrets = BeamioChatPgpKeychain.load() else {
+			guard let secrets = BeamioChatPgpKeychain.load(eoa: BeamioNativeAccountPointer.get()) else {
 				NSLog("[BeamioNativeVoice] accept — missing Chat PGP secrets in Keychain")
 				DispatchQueue.main.async { completion?("") }
 				return
@@ -2142,7 +1805,7 @@ enum BeamioNativeVoiceSignaling {
 			return
 		}
 		if !started {
-			sendAccept(callId: callId, sessionId: sessionId, completion: completion)
+			acceptWhenAuthorized(callId: callId, sessionId: sessionId, completion: completion)
 		}
 		// Started and still building: sendAcceptV3 reads calleeAudioReady when it creates the call.
 	}
@@ -2166,26 +1829,27 @@ enum BeamioNativeVoiceSignaling {
 				completion?("")
 			}
 		}
-		guard let wallet = BeamioChatWalletKeychain.load(), wallet.eoa.lowercased() == localEoa else {
+		// Native authorization before any signature: the SDK judges the
+		// call, the account and gen0. Anything but allow ends the call as cancelled.
+		guard BeamioPasscodeSession.shared.incomingCallAuthorizeAnswer(callId: offer.callId) == .allow else {
+			return fail("incoming answer not authorized")
+		}
+		guard BeamioChatWalletKeychain.hasKey(eoa: localEoa) else {
 			return fail("no stored wallet key")
 		}
 		BeamioCallTiming.mark("accept-v3-start")
 		var made: [BeamioVoiceV3.Own] = []
-		var sealedAccept: String?
-		if let prepared = takePreparedChannels(offer.callId) {
-			made = prepared.made
-			sealedAccept = prepared.acceptArmor
-			qaTrail("v3 accept uses channels prepared while ringing callId=\(offer.callId.prefix(8)) sealed=\(sealedAccept == nil ? "no" : "yes")")
-		} else {
+		let sealedAccept: String? = nil  // built after authorize; nothing is pre-sealed
+		do {
 			for _ in 0 ..< 4 {
-				guard let own = BeamioVoiceV3.newPaidChannel(payerKeyHex: wallet.privateKeyHex, payerEoa: localEoa) else {
+				guard let own = BeamioVoiceV3.newPaidChannel(payerEoa: localEoa) else {
 					return fail("sign")
 				}
 				made.append(own)
 			}
 			var exclude: Set<String> = []
 			if let mailbox = BeamioSiCipherPost.normalizeIp(BeamioChatPgpKeychain.loadMailboxIp()) { exclude.insert(mailbox) }
-			let avoid = [BeamioChatPgpKeychain.loadRoutePublicArmor(), offer.callerRouteArmored]
+			let avoid = [BeamioChatPgpKeychain.loadRoutePublicArmor(eoa: BeamioNativeAccountPointer.get()), offer.callerRouteArmored]
 			guard let voiceRelay = BeamioVoiceV3.RelayNodes.pick(excludeIps: exclude, excludeArmors: avoid),
 			      let videoRelay = BeamioVoiceV3.RelayNodes.pick(excludeIps: exclude, excludeArmors: avoid)
 			else { return fail("no relay nodes cached") }
@@ -2243,7 +1907,7 @@ enum BeamioNativeVoiceSignaling {
 		guard ok else {
 			BeamioNativeVoiceChannel.shared.stop()
 			lock.lock()
-			if activeCall?.offer.callId == offer.callId { activeCall = nil }
+			if activeCall?.offer.callId == offer.callId { wipeAndClearActiveCall() }
 			lock.unlock()
 			return fail("post")
 		}
@@ -2269,13 +1933,17 @@ enum BeamioNativeVoiceSignaling {
 			return hit
 		}
 		let sem = DispatchSemaphore(value: 0)
-		var fetched: BeamioVoiceOfferIdentity.Resolved?
+		let box = OfferWaitBox()
 		BeamioVoiceOfferIdentity.resolve(callId: callId, sessionId: sessionId) { resolved in
-			fetched = resolved
+			box.deliver(resolved)
 			sem.signal()
 		}
 		_ = sem.wait(timeout: .now() + 20)
-		guard let hit = fetched, hit.answerable else { return nil }
+		// A late result is dropped (box.finish), and an offer for a call that is no longer live is never cached.
+		guard let hit = box.finish(), hit.answerable,
+		      BeamioVoiceOfferIdentity.withinSignedExpiry(hit),
+		      isCallStillLive(callId: callId, sessionId: sessionId)
+		else { return nil }
 		rememberOffer(hit)
 		return hit
 	}

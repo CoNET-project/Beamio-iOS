@@ -12,7 +12,7 @@ import UIKit
 ///   the page (`wakeForCallPush` → `BeamioConetChatModule.wake`); a call that
 ///   ends releases it.
 /// - The module recognises a peer's `voice_end_v1` / `voice_call_timeout_v1`
-///   Chat message and hands it to `applyPeerCallControl` (same rule as Android).
+///   Chat message (v72: this hand-off is not attached; see the chat-line gate).
 /// - Every module event still reaches `observeChatEvent` (offers, status trail).
 enum BeamioNativeChatHooks {
 	private static var installed = false
@@ -42,9 +42,7 @@ enum BeamioNativeChatHooks {
 		BeamioConetChatModule.keepListenWhile = {
 			callObserver.calls.contains { !$0.hasEnded }
 		}
-		BeamioConetChatModule.callControlObserver = { type, callId, sessionId, from in
-			BeamioNativeVoiceSignaling.applyPeerCallControl(type: type, callId: callId, sessionId: sessionId, from: from)
-		}
+		// v72 (1): fail closed. Peer call control from the SDK drives nothing until the SDK confirms it delivers only verified signals.
 		BeamioConetChatModule.nativeObserver = { payload in
 			BeamioNativeVoiceSignaling.observeChatEvent(payload)
 		}

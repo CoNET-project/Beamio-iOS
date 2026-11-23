@@ -6,6 +6,7 @@
 import Foundation
 
 /// Polls `https://beamio.ca/app/update.json`, downloads newer bundles into `staging/`.
+/// Redirects are followed only on the same OTA host over https (`BeamioOutboundHosts.otaHosts`).
 @MainActor
 final class CashTreesPWAUpdateDaemon {
     static let shared = CashTreesPWAUpdateDaemon(bundleStore: CashTreesPWABundleStore.shared)
@@ -22,7 +23,11 @@ final class CashTreesPWAUpdateDaemon {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
-        self.session = URLSession(configuration: config)
+        self.session = URLSession(
+            configuration: config,
+            delegate: BeamioOutboundRedirectGuard(hosts: BeamioOutboundHosts.otaHosts),
+            delegateQueue: nil
+        )
     }
 
     func start() {
@@ -74,7 +79,11 @@ final class CashTreesPWAUpdateDaemon {
     }
 
     private func fetchRemoteUpdateInfo() async throws -> CashTreesPWAUpdateInfo {
-        var request = URLRequest(url: CashTreesPWAScheme.remoteUpdateManifestURL)
+        let manifestURL = CashTreesPWAScheme.remoteUpdateManifestURL
+        guard BeamioOutboundHosts.allows(manifestURL, hosts: BeamioOutboundHosts.otaHosts) else {
+            throw URLError(.unsupportedURL)
+        }
+        var request = URLRequest(url: manifestURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -85,6 +94,10 @@ final class CashTreesPWAUpdateDaemon {
 
     private func downloadAndStage(remote: CashTreesPWAUpdateInfo) async throws {
         let downloadURL = CashTreesPWAScheme.remoteBundleBaseURL.appendingPathComponent(remote.filename)
+        // The filename comes from the server manifest: check the final URL before the request, not only on redirect.
+        guard BeamioOutboundHosts.allows(downloadURL, hosts: BeamioOutboundHosts.otaHosts) else {
+            throw URLError(.unsupportedURL)
+        }
         var request = URLRequest(url: downloadURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let (tempZip, response) = try await session.download(for: request)

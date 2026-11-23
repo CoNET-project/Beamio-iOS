@@ -18,7 +18,7 @@ import UniformTypeIdentifiers
 import WebKit
 
 /// Consumer shell loads embedded SilentPassUI via `cashtrees-local://` scheme handler.
-/// Remote `https://beamio.ca/app/` deep links are mapped to the same path on localhost.
+/// Remote `https://beamio.app/app/` deep links are mapped to the same path on localhost.
 private func defaultLocalWebAppURL(from host: CashTreesLocalPWAHost) -> URL {
     host.entryURL
 }
@@ -260,11 +260,22 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
 
     let webConsoleMessageHandler = CashTreesWebConsoleMessageHandler()
 
+    /// PWA mnemonic sync and native preread are routed through a native-origin trust gate.
+    private let pwaWalletSyncGate = PwaWalletSyncGate(engine: PwaWalletSyncSdkEngine())
+
     private var nfcSession: NFCTagReaderSession?
     private var bindSessionActive = false
     private var initialWebRenderReadySignaled = false
     private var webContentProcessNeedsReload = false
     private var lastLoadedWebURLString: String?
+    /// Captured by native navigation callbacks, never supplied by page JavaScript.
+    /// Bridge trust is revoked whenever the committed document's bundle generation
+    /// differs from the currently active reviewed tree.
+    private var pendingMainDocumentTreeSHA256: String?
+    private var committedMainDocumentTreeSHA256: String?
+    private var committedMainDocumentURL: URL?
+    /// The document of the last trusted reply on this channel; passcode events go only to it (PasscodeEventOutlet).
+    let passcodeReplyProxy = PasscodeReplyProxyStore()
     private var becameActiveObserver: NSObjectProtocol?
     private var didEnterBackgroundObserver: NSObjectProtocol?
     private var embeddedPwaUpdateObserver: NSObjectProtocol?
@@ -295,9 +306,18 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
 
     override init() {
         super.init()
+        CashTreesNativeRecoveryRoute.installOnce()
         // PushKit + CallKit live in BeamioVoipIncomingBootstrap (AppDelegate).
         // Wire Answer/End into the WebView once the shell is up.
         BeamioVoipIncomingBootstrap.shared.setWebBridge { [weak self] action, callId, sessionId in
+            if action == "nativeCallHangup" {
+                // v66 §73: a chatModuleEvent with reason and time; the page answers with the one voice_end_v1.
+                self?.dispatchIOSBridgeJsonToWeb([
+                    "action": "chatModuleEvent",
+                    "event": NativeCallHangupEvent.payload(callId: callId, sessionId: sessionId),
+                ])
+                return
+            }
             self?.dispatchIOSBridgeJsonToWeb([
                 "action": action,
                 "callId": callId,
@@ -755,8 +775,32 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
         guard let url = navigationAction.request.url else {
+            if navigationAction.targetFrame?.isMainFrame == true {
+                pendingMainDocumentTreeSHA256 = nil
+                committedMainDocumentTreeSHA256 = nil
+                committedMainDocumentURL = nil
+            }
             decisionHandler(.allow)
             return
+        }
+        if navigationAction.targetFrame?.isMainFrame == true {
+            // The delegate callbacks do not expose a stable WKNavigation identifier on
+            // WKNavigationAction. Serialize provisional main-frame loads so a later
+            // navigation cannot overwrite the captured generation for an earlier one.
+            guard pendingMainDocumentTreeSHA256 == nil else {
+                decisionHandler(.cancel)
+                return
+            }
+            if url.scheme?.lowercased() == CashTreesPWAScheme.scheme,
+               url.host?.lowercased() == CashTreesPWAScheme.host {
+                pendingMainDocumentTreeSHA256 = CashTreesPWABundleStore.shared.activeTreeSHA256(
+                    digest: NativeBridgeTrust.treeDigestOfActive
+                )
+            } else {
+                pendingMainDocumentTreeSHA256 = nil
+                committedMainDocumentTreeSHA256 = nil
+                committedMainDocumentURL = nil
+            }
         }
         if shouldBlockBeamioNdefTopLevelNavigation(url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? false) {
             decisionHandler(.cancel)
@@ -780,6 +824,17 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if webView.url?.scheme?.lowercased() == CashTreesPWAScheme.scheme,
+           webView.url?.host?.lowercased() == CashTreesPWAScheme.host,
+           let pending = pendingMainDocumentTreeSHA256,
+           CashTreesPWABundleStore.shared.activeTreeSHA256(digest: NativeBridgeTrust.treeDigestOfActive) == pending {
+            committedMainDocumentTreeSHA256 = pending
+            committedMainDocumentURL = webView.url
+        } else {
+            committedMainDocumentTreeSHA256 = nil
+            committedMainDocumentURL = nil
+        }
+        pendingMainDocumentTreeSHA256 = nil
         CashTreesWebConsoleRelay.reinject(into: webView, reason: "didCommit")
     }
 
@@ -804,10 +859,16 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        pendingMainDocumentTreeSHA256 = nil
+        committedMainDocumentTreeSHA256 = nil
+        committedMainDocumentURL = nil
         beginInitialWebHandoffIfNeeded()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        pendingMainDocumentTreeSHA256 = nil
+        committedMainDocumentTreeSHA256 = nil
+        committedMainDocumentURL = nil
         beginInitialWebHandoffIfNeeded()
     }
 
@@ -1276,7 +1337,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
               payload=payload||{};
               window.webkit.messageHandlers[H].postMessage({
                 action:'setNativeChatPgpSecrets',
-                privateKeyArmor:payload.privateKeyArmor||'',
                 publicKeyArmor:payload.publicKeyArmor||'',
                 pgpKeyId:payload.pgpKeyId||'',
                 routePublicKeyArmor:payload.routePublicKeyArmor||'',
@@ -1311,6 +1371,46 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 action:'chatModuleCommand',
                 command:payload.command||payload||{}
               });
+            },
+            passcodeProvision:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'passcodeProvision',reqId:payload.reqId,eoa:payload.eoa||'',phrase:payload.phrase||'',passcode:payload.passcode||''}});
+            },
+            passcodeUnlock:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'passcodeUnlock',reqId:payload.reqId,eoa:payload.eoa||'',passcode:payload.passcode||''}});
+            },
+            passcodeChange:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'passcodeChange',reqId:payload.reqId,eoa:payload.eoa||'',oldPasscode:payload.oldPasscode||'',newPasscode:payload.newPasscode||''}});
+            },
+            passcodeDisable:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'passcodeDisable',reqId:payload.reqId,eoa:payload.eoa||'',passcode:payload.passcode||''}});
+            },
+            nativeRepairProvide:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'nativeRepairProvide',reqId:payload.reqId,eoa:payload.eoa||'',phrase:payload.phrase||'',passcode:payload.passcode||'',requestReqId:payload.requestReqId}});
+            },
+            passcodeStatus:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'passcodeStatus',reqId:payload.reqId,eoa:payload.eoa||''}});
+            },
+            endSystemCall:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'endSystemCall',reqId:payload.reqId,callId:payload.callId||'',sessionId:payload.sessionId||''}});
+            },
+            dismissIncomingSystemCall:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'dismissIncomingSystemCall',reqId:payload.reqId,callId:payload.callId||'',sessionId:payload.sessionId||''}});
+            },
+            uiLockState:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'uiLockState',reqId:payload.reqId,locked:payload.locked===true}});
+            },
+            nativeIdentityCheck:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'chatModuleCommand',command:{type:'nativeIdentityCheck',reqId:payload.reqId,eoa:payload.eoa||''}});
             },
             chatModuleSignResponse:function(payload){
               payload=payload||{};
@@ -1440,6 +1540,16 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.name == CashTreesWebConsoleRelay.handlerName {
+            let frame = message.frameInfo
+            guard NativeBridgeTrust.currentBundleIsTrusted(
+                isMainFrame: frame.isMainFrame,
+                scheme: frame.securityOrigin.protocol,
+                host: frame.securityOrigin.host,
+                port: frame.securityOrigin.port,
+                documentTreeSHA256: committedMainDocumentTreeSHA256,
+                frameDocumentURL: frame.request.url,
+                committedDocumentURL: committedMainDocumentURL
+            ) else { return }
             CashTreesWebConsoleRelay.handle(message)
             return
         }
@@ -1447,6 +1557,47 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
               let body = message.body as? [String: Any],
               let action = body["action"] as? String
         else { return }
+        let frame = message.frameInfo
+        let trustedNativeSource = NativeBridgeTrust.currentBundleIsTrusted(
+            isMainFrame: frame.isMainFrame,
+            scheme: frame.securityOrigin.protocol,
+            host: frame.securityOrigin.host,
+            port: frame.securityOrigin.port,
+            documentTreeSHA256: committedMainDocumentTreeSHA256,
+            frameDocumentURL: frame.request.url,
+            committedDocumentURL: committedMainDocumentURL
+        )
+        if let command = PwaWalletSyncBridge.walletSyncCommand(in: body) {
+            pwaWalletSyncGate.handle(command: command, trustedOrigin: trustedNativeSource) { [weak self] ack in
+                DispatchQueue.main.async { self?.dispatchIOSBridgeJsonToWeb(ack) }
+            }
+            return
+        }
+        if let proxy = PasscodeEventOutlet.proxy(
+            trusted: trustedNativeSource,
+            scheme: frame.securityOrigin.protocol,
+            host: frame.securityOrigin.host,
+            port: frame.securityOrigin.port,
+            documentURL: committedMainDocumentURL?.absoluteString,
+            documentTreeSHA256: committedMainDocumentTreeSHA256
+        ) {
+            passcodeReplyProxy.record(proxy)
+        }
+        guard trustedNativeSource else {
+            if action == "chatModuleCommand" {
+                let command = body["command"] as? [String: Any] ?? body
+                dispatchIOSBridgeJsonToWeb([
+                    "action": "chatModuleEvent",
+                    "event": [
+                        "type": "ack",
+                        "reqId": command["reqId"] ?? NSNull(),
+                        "ok": false,
+                        "error": NativeBridgeTrust.untrustedSourceErrorCode(forCommand: command["type"] as? String ?? ""),
+                    ],
+                ])
+            }
+            return
+        }
         switch action {
         case "consoleLog":
             CashTreesWebConsoleRelay.handleBridgeConsoleLog(body)
@@ -1743,7 +1894,7 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
             }
         case "setNativeChatPgpSecrets":
             DispatchQueue.main.async {
-                let ok = BeamioChatPgpKeychain.upsert(fromWeb: body)
+                let ok = BeamioChatPgpKeychain.upsert(eoa: BeamioNativeAccountPointer.get(), fromWeb: body)
                 NSLog("[CashTreesIOS] setNativeChatPgpSecrets ok=%@", ok ? "true" : "false")
             }
         case "setNativeVoiceRelayNodes":
@@ -1793,21 +1944,88 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 }
             }
         case "chatModuleCommand":
-            // The shell sets the chat SDK apiBaseUrl to beamio.ca on every forwarded init (ChatApiBaseOverride).
             let command = ChatApiBaseOverride.apply(body["command"] as? [String: Any] ?? body)
+            if let refusal = PasscodeCommandWhitelist.refusal(for: command) {
+                dispatchIOSBridgeJsonToWeb([
+                    "action": "chatModuleEvent",
+                    "event": [
+                        "type": "ack",
+                        "reqId": command["reqId"] ?? NSNull(),
+                        "ok": false,
+                        "error": refusal,
+                    ],
+                ])
+                return
+            }
+            guard NativeBridgeTrust.allowsPageCommand(command["type"] as? String ?? "") else {
+                dispatchIOSBridgeJsonToWeb([
+                    "action": "chatModuleEvent",
+                    "event": [
+                        "type": "ack",
+                        "reqId": command["reqId"] ?? NSNull(),
+                        "ok": false,
+                        "error": "native_only",
+                    ],
+                ])
+                return
+            }
+            if (command["type"] as? String) == "dismissIncomingSystemCall" || (command["type"] as? String) == "endSystemCall" {
+                // v46 §52: local only. Stops the ring and the CallKit UI of an unanswered incoming call. Nothing is sent.
+                let cid = (command["callId"] as? String) ?? ""
+                let sid = (command["sessionId"] as? String) ?? ""
+                if NativeSystemCallActionWhitelist.refusal(for: command) != nil {
+                    dispatchIOSBridgeJsonToWeb(["action": "chatModuleEvent", "event": ["type": "ack", "reqId": command["reqId"] ?? NSNull(), "ok": false, "error": "bad_request"]])
+                    break
+                }
+                // v48 §54: a malformed callId (8-128 chars of [A-Za-z0-9_-]) or an empty sessionId is bad_request and acts on nothing.
+                // A well-formed request with no matching unanswered call is an idempotent no-op answered ok.
+                let cidOK = cid.range(of: "^[A-Za-z0-9_-]{8,128}$", options: .regularExpression) != nil
+                let valid = cidOK && !sid.isEmpty
+                if valid { _ = BeamioVoipIncomingBootstrap.shared.callKit.dismissIncomingSystemCall(callId: cid, sessionId: sid, includeAnswered: (command["type"] as? String) == "endSystemCall") }
+                var ack: [String: Any] = ["type": "ack", "reqId": command["reqId"] ?? NSNull(), "ok": valid]
+                if !valid { ack["error"] = "bad_request" }
+                dispatchIOSBridgeJsonToWeb(["action": "chatModuleEvent", "event": ack])
+                break
+            }
+            // UI lock from the page: only `locked: true` acts. It leaves the native session and
+            // the generation alone; the lock is the SDK's uiLock, never lockAll.
+            if (command["type"] as? String) == "uiLockState" {
+                // v42 §46: only `locked: true` is valid; anything else is answered bad_request. Every case gets an ack.
+                let isLock = (command["locked"] as? Bool) == true
+                if isLock { BeamioPasscodeSession.shared.uiLock() }
+                var ack: [String: Any] = ["type": "ack", "reqId": command["reqId"] ?? NSNull(), "ok": isLock]
+                if !isLock { ack["error"] = "bad_request" }
+                dispatchIOSBridgeJsonToWeb(["action": "chatModuleEvent", "event": ack])
+                break
+            }
             BeamioNativeVoiceSignaling.qaTrail("chatModuleCommand \((command["type"] as? String) ?? (command["cmd"] as? String) ?? "?")")
             // Caller cancel / hang-up is acted on natively (module observer), before the page sees it.
             BeamioNativeChatHooks.install()
+            #if DEBUG || BEAMIO_QA
+            let qaCmdType = (command["type"] as? String) ?? ""
+            let qaCmdStart = CFAbsoluteTimeGetCurrent()
+            #endif
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 // Emit may be chatModuleEvent or chatModuleSignRequest (full bridge payload).
                 BeamioConetChatModule.handleCommand(command) { payload in
+                    if (command["type"] as? String) == "passcodeUnlock" {
+                        // A locked incoming answer waits for this unlock: resume it if authorized now.
+                        BeamioNativeVoiceSignaling.resumeAwaitingAccepts()
+                    }
+                    #if DEBUG || BEAMIO_QA
+                    // QA timing only (BEAMIO_QA): native time from command receipt to reply, with status codes. No values.
+                    if qaCmdType.hasPrefix("shellRecord") {
+                        BeamioQALog.shellRecordTiming(cmd: qaCmdType, startedAt: qaCmdStart, payload: payload)
+                    }
+                    #endif
                     DispatchQueue.main.async {
                         self?.dispatchIOSBridgeJsonToWeb(payload)
                     }
                 }
             }
         case "chatModuleSignResponse":
-            BeamioConetChatSignBroker.fulfill(fromWeb: body)
+            // Legacy page signing is disabled; signing now completes inside BeamioConetChatModule.
+            break
         case "bindPushIdentity":
             let eoa = body["eoa"] as? String
             let pgpKeyId = body["pgpKeyId"] as? String
@@ -1848,8 +2066,8 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 }
             }
         case "registerPushDeviceHttp":
-            // PWA-signed body → native URLSession (WKWebView custom-scheme fetch
-            // to beamio.app often fails; CallKit wake needs DB write).
+            // PWA-signed body → native URLSession (a WKWebView custom-scheme fetch to the
+            // API host often fails; CallKit wake needs the DB write). Target: beamio.ca only.
             let pushRegRequestId = (body["requestId"] as? String) ?? ""
             let pushRegUrl = (body["url"] as? String) ?? ""
             let pushRegBody = (body["body"] as? String) ?? ""
@@ -1865,7 +2083,7 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         }
     }
 
-    /// POST already-signed `registerPushDevice` JSON via URLSession.
+    /// POST already-signed `registerPushDevice` JSON via `BeamioPushRegistrationHTTP` (push allowlist, redirect guard).
     private func postRegisterPushDeviceHttp(urlString: String, bodyJson: String, requestId: String) {
         let rid = requestId.trimmingCharacters(in: .whitespacesAndNewlines)
         func reply(ok: Bool, status: Int = 0, error: String? = nil) {
@@ -1878,40 +2096,20 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
             if let error, !error.isEmpty { payload["error"] = error }
             dispatchIOSBridgeJsonToWeb(payload)
         }
-        guard let url = URL(string: urlString),
-              url.scheme == "https",
-              let host = url.host,
-              BeamioHostRules.isBeamioHost(host),
-              let data = bodyJson.data(using: .utf8),
-              !data.isEmpty
-        else {
-            reply(ok: false, error: "invalid_url_or_body")
-            return
-        }
-        var req = URLRequest(url: url, timeoutInterval: 14)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = data
-        URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+        // Outbound target: exact push allowlist only, never the inbound BeamioHostRules. Dedicated session
+        // follows redirects only on the same allowed host.
+        BeamioPushRegistrationHTTP.post(urlString: urlString, bodyJson: bodyJson) { outcome in
             DispatchQueue.main.async {
-                if let error {
-                    reply(ok: false, error: error.localizedDescription)
+                if let error = outcome.error {
+                    reply(ok: false, error: error)
                     return
                 }
-                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                var success = false
-                if status >= 200, status < 300, let data,
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                {
-                    success = json["success"] as? Bool == true
-                }
                 CashTreesWebConsoleRelay.logNative(
-                    "registerPushDeviceHttp status=\(status) ok=\(success) rid=\(rid.prefix(12))"
+                    "registerPushDeviceHttp status=\(outcome.status) ok=\(outcome.ok) rid=\(rid.prefix(12))"
                 )
-                reply(ok: success, status: status)
-                _ = self
+                reply(ok: outcome.ok, status: outcome.status)
             }
-        }.resume()
+        }
     }
 
     private func dispatchEmbeddedPwaUpdateAvailable(from note: Notification) {
@@ -2504,6 +2702,31 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         }
     }
 
+    /// The proxy of the committed main document now, or nil when the trust gate fails for it (remote, changed, not loaded).
+    private func currentDocumentPasscodeProxy() -> PasscodeReplyProxy? {
+        guard let url = committedMainDocumentURL else { return nil }
+        let scheme = url.scheme ?? ""
+        let host = url.host ?? ""
+        let port = url.port ?? 0
+        let trusted = NativeBridgeTrust.currentBundleIsTrusted(
+            isMainFrame: true,
+            scheme: scheme,
+            host: host,
+            port: port,
+            documentTreeSHA256: committedMainDocumentTreeSHA256,
+            frameDocumentURL: url,
+            committedDocumentURL: url
+        )
+        return PasscodeEventOutlet.proxy(
+            trusted: trusted,
+            scheme: scheme,
+            host: host,
+            port: port,
+            documentURL: url.absoluteString,
+            documentTreeSHA256: committedMainDocumentTreeSHA256
+        )
+    }
+
     private func dispatchIOSBridgeJsonToWeb(_ dict: [String: Any], completion: (() -> Void)? = nil) {
         // Early PushKit before WebView / before PWA listener: queue push tokens.
         if let action = dict["action"] as? String, action == "pushDeviceToken" {
@@ -2522,6 +2745,14 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                     webContentReadyForPush ? "1" : "0",
                     webView == nil ? "nil" : "ok"
                 )
+                completion?()
+                return
+            }
+        }
+        if PasscodeEventOutlet.isPasscodeEvent(dict) {
+            let decision = PasscodeEventOutlet.decide(recorded: passcodeReplyProxy.current(), current: currentDocumentPasscodeProxy())
+            guard decision == .deliver else {
+                NSLog("[CashTreesIOS] passcode event not delivered decision=%@ %@", decision.rawValue, PasscodeEventOutlet.logFields(dict))
                 completion?()
                 return
             }
@@ -2729,6 +2960,8 @@ struct CashTreesWebView: UIViewRepresentable {
 
         config.setURLSchemeHandler(localPWAHost.schemeHandler, forURLScheme: CashTreesPWAScheme.scheme)
 
+        // Page console relay: Debug and QA builds only (CashTreesWebConsoleRelay.relaysPageConsole).
+        if CashTreesWebConsoleRelay.relaysPageConsole {
         let consoleRelay = CashTreesWebConsoleRelay.injectionScript()
         config.userContentController.addUserScript(
             CashTreesWebConsoleRelay.pageUserScript(
@@ -2744,14 +2977,17 @@ struct CashTreesWebView: UIViewRepresentable {
                 forMainFrameOnly: false
             )
         )
+        }
 
         let coord = context.coordinator
         coord.loadState = loadState
         // Register handlers BEFORE user scripts so documentStart bridge can see
         // messageHandlers.CashTreesIOS (otherwise CashTreesIOS never installs).
         config.userContentController.add(coord, name: cashTreesIOSWKHandlerName)
-        config.userContentController.add(coord.webConsoleMessageHandler, name: CashTreesWebConsoleRelay.handlerName)
-        CashTreesWebConsoleRelay.logNative("registered handlers CashTreesIOS + \(CashTreesWebConsoleRelay.handlerName)")
+        if CashTreesWebConsoleRelay.relaysPageConsole {
+            config.userContentController.add(coord.webConsoleMessageHandler, name: CashTreesWebConsoleRelay.handlerName)
+            CashTreesWebConsoleRelay.logNative("registered handlers CashTreesIOS + \(CashTreesWebConsoleRelay.handlerName)")
+        }
 
         let status = queryIosNfcStatusString()
         let bridge = CashTreesWebCoordinator.bridgeInjectionScript(
@@ -2769,11 +3005,11 @@ struct CashTreesWebView: UIViewRepresentable {
 
         let webView = CashTreesWKWebView(frame: .zero, configuration: config)
         coord.webView = webView
+        coord.passcodeReplyProxy.reset()
         webView.navigationDelegate = coord
         webView.uiDelegate = coord
-        if #available(iOS 16.4, *) {
-            webView.isInspectable = true
-        }
+        // Inspectable only in Debug and QA builds; Release and App Store builds never call setInspectable:.
+        CashTreesWebInspection.apply(to: webView)
         webView.isOpaque = true
         webView.backgroundColor = cashTreesWebSurfaceColor
         let sv = webView.scrollView
@@ -2808,6 +3044,7 @@ struct CashTreesWebView: UIViewRepresentable {
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: cashTreesIOSWKHandlerName)
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: CashTreesWebConsoleRelay.handlerName)
         coordinator.webView = nil
+        coordinator.passcodeReplyProxy.reset()
         coordinator.loadState = nil
     }
 
@@ -2916,6 +3153,7 @@ struct ContentView: View {
     @ObservedObject private var localPWAHost = CashTreesLocalPWAHost.shared
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var webLoadState = CashTreesWebLoadState()
+    @ObservedObject private var legacyGate = CashTreesLegacyStoreGate.shared
     @ObservedObject private var inCall = BeamioInCallScreenModel.shared
     @State private var webContentVisible = false
 
@@ -2923,7 +3161,8 @@ struct ContentView: View {
         ZStack {
             cashTreesWebSurfaceSwiftUIColor
                 .ignoresSafeArea()
-            if localPWAHost.isReady {
+            // The WebView is created only after the legacy store report is written (see CashTreesLegacyStoreGate).
+            if localPWAHost.isReady && legacyGate.isReady {
                 CashTreesWebView(
                     loadState: webLoadState,
                     deepLinkStore: deepLinkStore,
@@ -2963,6 +3202,8 @@ struct ContentView: View {
             if !presented { webLoadState.callScreenDismissed() }
         }
         .onAppear {
+            // Legacy store report first; the WebView is created only after it is written (the native splash shows meanwhile).
+            legacyGate.start()
             localPWAHost.startIfNeeded()
             webLoadState.scheduleSplashFallback()
             if inCall.live {

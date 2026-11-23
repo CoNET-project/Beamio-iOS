@@ -1,33 +1,32 @@
 {
-  "originHash": "76bf8aeaf47727a4e6b53b8db50f39954de0f047b79c696a154e809dfd5ebcdd",
-  "pins": [
+  "originHash" : "76bf8aeaf47727a4e6b53b8db50f39954de0f047b79c696a154e809dfd5ebcdd",
+  "pins" : [
     {
-      "identity": "chat-sdk-ios",
-      "kind": "remoteSourceControl",
-      "location": "https://github.com/CoNET-project/chat-sdk-ios.git",
-      "state": {
-        "revision": "a4be9d171f7c62f41c3904557eb50fc51bfa4ee7",
-        "version": "0.1.8"
+      "identity" : "chat-sdk-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/CoNET-project/chat-sdk-ios.git",
+      "state" : {
+        "revision" : "6808166533dd5210b8cb750e395896f846f6a35d"
       }
     },
     {
-      "identity": "swift-secp256k1",
-      "kind": "remoteSourceControl",
-      "location": "https://github.com/21-DOT-DEV/swift-secp256k1",
-      "state": {
-        "revision": "bcd6dd8e615ce243eab7097f213c8c4b39305a2e",
-        "version": "0.24.0"
+      "identity" : "swift-secp256k1",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/21-DOT-DEV/swift-secp256k1",
+      "state" : {
+        "revision" : "bcd6dd8e615ce243eab7097f213c8c4b39305a2e",
+        "version" : "0.24.0"
       }
     },
     {
-      "identity": "zipfoundation",
-      "kind": "remoteSourceControl",
-      "location": "https://github.com/weichsel/ZIPFoundation",
-      "state": {
-        "revision": "22787ffb59de99e5dc1fbfe80b19c97a904ad48d",
-        "version": "0.9.20"
+      "identity" : "zipfoundation",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/weichsel/ZIPFoundation",
+      "state" : {
+        "revision" : "22787ffb59de99e5dc1fbfe80b19c97a904ad48d",
+        "version" : "0.9.20"
       }
     }
   ],
-  "version": 3
+  "version" : 3
 }

@@ -31,11 +31,66 @@ enum BeamioVoiceV3 {
 		var wkB64: String { wk.base64EncodedString() }
 	}
 
+	/// The temporary channel wallet key T. Bytes only: never logged, never written to disk, zeroed on deinit.
+	/// The one String form is the accept text's `tk` field (`wireText`), which the existing protocol requires.
+	final class ChannelKey: Equatable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+		private var bytes: [UInt8]
+
+		init(bytes: [UInt8]) { self.bytes = bytes }
+
+		deinit { BeamioNativeWallet.wipe(&bytes) }
+
+		/// Zero the key when its call ends: the call's channel key is not kept.
+		func wipe() { BeamioNativeWallet.wipe(&bytes) }
+
+		// Logging, print and dump show no bytes.
+		var description: String { "ChannelKey(redacted)" }
+		var debugDescription: String { "ChannelKey(redacted)" }
+		var customMirror: Mirror { Mirror(self, children: [], displayStyle: .class) }
+
+		/// Runs `body` on the key bytes; the bytes themselves are not returned.
+		func withBytes<R>(_ body: ([UInt8]) -> R) -> R { body(bytes) }
+
+		/// EIP-55 address of T (the temporary wallet's address), computed natively.
+		func address() -> String? { withBytes { BeamioNativeEthSigner.address(privateKey: $0) } }
+
+		/// The accept-text form `0x` + 64 hex digits. A protocol copy, made only when the accept text is built.
+		func wireText() -> String {
+			withBytes { key in "0x" + key.map { String(format: "%02x", $0) }.joined() }
+		}
+
+		/// Parses the accept-text form; nil unless it is 32 bytes in secp256k1 range.
+		static func fromWire(_ text: String) -> ChannelKey? {
+			var digits = Substring(text)
+			if digits.hasPrefix("0x") { digits = digits.dropFirst(2) }
+			guard digits.count == 64 else { return nil }
+			var out = [UInt8]()
+			out.reserveCapacity(32)
+			var i = digits.startIndex
+			while i < digits.endIndex {
+				let j = digits.index(i, offsetBy: 2)
+				guard let b = UInt8(digits[i ..< j], radix: 16) else {
+					BeamioNativeWallet.wipe(&out)
+					return nil
+				}
+				out.append(b)
+				i = j
+			}
+			guard BeamioNativeEthSigner.isValidKey(out) else {
+				BeamioNativeWallet.wipe(&out)
+				return nil
+			}
+			return ChannelKey(bytes: out)
+		}
+
+		static func == (lhs: ChannelKey, rhs: ChannelKey) -> Bool { lhs === rhs }
+	}
+
 	/// A channel this side listens on: temporary wallet and its payment proof.
 	struct Own: Equatable {
 		var channel: Channel
-		/// T private key, 64 hex without 0x. Memory only.
-		var tkHex: String
+		/// T (memory only, bytes only).
+		var tk: ChannelKey
 		var tempAddress: String
 		/// `{payer, notAfter, maxBytes, maxSeconds, sig}` as JSON text.
 		var payJson: String
@@ -74,17 +129,44 @@ enum BeamioVoiceV3 {
 
 	// MARK: - Random material
 
-	static func randomBytes(_ n: Int) -> Data {
+	/// Secure random bytes, or nil when the system source fails. Never a zero-filled fallback (a failed draw
+	/// must not become a zero private key): the caller refuses to build the channel.
+	#if BEAMIO_TEST_HOOKS
+	/// Test-only: force the secure-random draw to fail (BEAMIO_TEST_HOOKS builds only; absent from release).
+	nonisolated(unsafe) static var randomFailureForTests = false
+	#endif
+
+	static func randomBytesOrNil(_ n: Int) -> Data? {
 		var bytes = [UInt8](repeating: 0, count: n)
-		_ = SecRandomCopyBytes(kSecRandomDefault, n, &bytes)
-		return Data(bytes)
+		#if BEAMIO_TEST_HOOKS
+		let status = randomFailureForTests ? errSecUnimplemented : SecRandomCopyBytes(kSecRandomDefault, n, &bytes)
+		#else
+		let status = SecRandomCopyBytes(kSecRandomDefault, n, &bytes)
+		#endif
+		guard status == errSecSuccess else {
+			BeamioNativeWallet.wipe(&bytes)
+			return nil
+		}
+		let out = Data(bytes)
+		BeamioNativeWallet.wipe(&bytes)
+		return out
 	}
 
-	static func newChannel() -> Channel {
-		Channel(
-			sid: randomBytes(16).map { String(format: "%02x", $0) }.joined(),
-			key: randomBytes(32),
-			wk: randomBytes(32)
+	/// A channel private key is usable only when it is not all zero and is a valid secp256k1 scalar (failed closed).
+	static func isUsableChannelKey(_ bytes: [UInt8]) -> Bool {
+		bytes.count == 32 && bytes.contains { $0 != 0 } && BeamioNativeEthSigner.isValidKey(bytes)
+	}
+
+	/// A new channel from secure random material, or nil if the system source fails (the channel is then refused).
+	static func newChannel() -> Channel? {
+		guard let sidBytes = randomBytesOrNil(16),
+		      let key = randomBytesOrNil(32),
+		      let wk = randomBytesOrNil(32)
+		else { return nil }
+		return Channel(
+			sid: sidBytes.map { String(format: "%02x", $0) }.joined(),
+			key: key,
+			wk: wk
 		)
 	}
 
@@ -102,28 +184,28 @@ enum BeamioVoiceV3 {
 	}
 
 	/// New temporary wallet T and the payer's signature over it. Blocking.
-	static func newPaidChannel(payerKeyHex: String, payerEoa: String) -> Own? {
-		let tk = randomBytes(32).map { String(format: "%02x", $0) }.joined()
-		guard let temp = nativeOrWebView("address", native: { BeamioNativeEthSigner.address(privateKeyHex: tk) }, webView: {
-			waitResult({ BeamioOpenPgpHost.shared.walletAddress(privateKeyHex: tk, completion: $0) })
-		}) else { return nil }
+	/// The payer key stays in BeamioNativeWallet; only the EIP-191 signature comes back.
+	static func newPaidChannel(payerEoa: String) -> Own? {
+		guard var raw = randomBytesOrNil(32) else { return nil }
+		defer { BeamioNativeWallet.wipe(&raw) }
+		// Fail closed: no zero or invalid key becomes a channel (no signalling is built from it).
+		guard isUsableChannelKey([UInt8](raw)) else { return nil }
+		let tk = ChannelKey(bytes: [UInt8](raw))
+		guard let temp = tk.address() else { return nil }
 		let notAfter = Int64(Date().timeIntervalSince1970) + payValidSec
 		let text = payText(temp: temp, notAfter: notAfter)
-		guard let sig = nativeOrWebView("pay", native: { BeamioNativeEthSigner.signEip191(privateKeyHex: payerKeyHex, message: text) }, webView: {
-			waitResult({ BeamioOpenPgpHost.shared.signEip191(privateKeyHex: payerKeyHex, message: text, completion: $0) })
-		}) else { return nil }
+		guard case .success(let sig) = BeamioNativeWallet.signEip191(eoa: payerEoa, message: text) else { return nil }
 		let pay: [String: Any] = ["payer": payerEoa.lowercased(), "notAfter": notAfter, "maxBytes": 0, "maxSeconds": 0, "sig": sig]
 		guard let data = try? JSONSerialization.data(withJSONObject: pay), let json = String(data: data, encoding: .utf8) else { return nil }
-		return Own(channel: newChannel(), tkHex: tk, tempAddress: temp.lowercased(), payJson: json, relay: nil)
+		guard let channel = newChannel() else { return nil }
+		return Own(channel: channel, tk: tk, tempAddress: temp.lowercased(), payJson: json, relay: nil)
 	}
 
 	/// `voice_listen` v3 for one own channel on its relay. Blocking.
 	static func listenCommand(_ own: Own, relay: Relay) -> [String: Any]? {
 		let ts = Int64(Date().timeIntervalSince1970)
 		let text = listenText(sid: own.channel.sid, wk: own.channel.wkB64, relayKeyId: relay.domain, timestamp: ts)
-		guard let tempSig = nativeOrWebView("listen", native: { BeamioNativeEthSigner.signEip191(privateKeyHex: own.tkHex, message: text) }, webView: {
-			waitResult({ BeamioOpenPgpHost.shared.signEip191(privateKeyHex: own.tkHex, message: text, completion: $0) })
-		}),
+		guard let tempSig = own.tk.withBytes({ BeamioNativeEthSigner.signEip191(privateKey: $0, message: text) }),
 		      let payData = own.payJson.data(using: .utf8),
 		      let pay = try? JSONSerialization.jsonObject(with: payData) as? [String: Any]
 		else { return nil }
@@ -162,14 +244,14 @@ enum BeamioVoiceV3 {
 
 	private static func ownChannel(from obj: Any?) -> Own? {
 		guard let c = channel(from: obj), let d = obj as? [String: Any],
-		      let tk = d["tk"] as? String, let pay = d["pay"] as? [String: Any]
+		      let tkText = d["tk"] as? String, let pay = d["pay"] as? [String: Any]
 		else { return nil }
-		let tkHex = BeamioChatWalletKeychain.normalizeKey(tk)
-		guard !tkHex.isEmpty, let payData = try? JSONSerialization.data(withJSONObject: pay),
+		guard let tk = ChannelKey.fromWire(tkText) else { return nil }
+		guard let payData = try? JSONSerialization.data(withJSONObject: pay),
 		      let payJson = String(data: payData, encoding: .utf8)
 		else { return nil }
-		guard let temp = waitResult({ BeamioOpenPgpHost.shared.walletAddress(privateKeyHex: tkHex, completion: $0) }) else { return nil }
-		return Own(channel: c, tkHex: tkHex, tempAddress: temp.lowercased(), payJson: payJson, relay: nil)
+		guard let temp = tk.address() else { return nil }
+		return Own(channel: c, tk: tk, tempAddress: temp.lowercased(), payJson: payJson, relay: nil)
 	}
 
 	private static func peerChannel(from obj: Any?) -> Peer? {
@@ -198,7 +280,7 @@ enum BeamioVoiceV3 {
 			      let pay = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
 			else { return nil }
 			var w = wire(o.channel)
-			w["tk"] = "0x" + o.tkHex
+			w["tk"] = o.tk.wireText()
 			w["pay"] = pay
 			return w
 		}
@@ -342,19 +424,9 @@ enum BeamioVoiceV3 {
 		noPush: Bool
 	) -> String? {
 		guard peerUserPgp.contains("BEGIN PGP PUBLIC KEY"), peerRoute.contains("BEGIN PGP PUBLIC KEY") else { return nil }
-		// Our wallet's EIP-191 signature: native when the stored key is this wallet's
-		// (no WebView round trip), else the SDK's signer as before.
-		let stored = BeamioChatWalletKeychain.load()
-		let walletKey = stored?.eoa.lowercased() == localEoa.lowercased() ? stored?.privateKeyHex : nil
-		guard let sig = nativeOrWebView(
-			"chat",
-			native: { walletKey.flatMap { BeamioNativeEthSigner.signEip191(privateKeyHex: $0, message: text) } },
-			webView: {
-				waitResult({ done in
-					BeamioConetChatSignBroker.requestEip191(message: text, timeout: 10) { done($0) }
-				})
-			}
-		) else { return nil }
+		// Our wallet's EIP-191 signature: native only (BeamioNativeWallet checks the account). The WebView sign path was removed
+		// with the page's chatModuleSignResponse (S-3); a refusal here ends the seal at once, with no wait.
+		guard let sig = try? BeamioNativeWallet.signEip191(eoa: localEoa, message: text).get() else { return nil }
 		let envelope: [String: Any] = [
 			"timestamp": Int(Date().timeIntervalSince1970 * 1000),
 			"text": text,
@@ -403,61 +475,8 @@ extension BeamioVoiceV3 {
 }
 
 extension BeamioVoiceV3 {
-	/// First `voice_listen` of a channel, signed with T and encrypted to its relay
-	/// ahead of time (callee, while it rings). Nothing is sent before Answer, so the
-	/// relay learns nothing and nothing is paid until the listen opens. Memory only;
-	/// used once, within 5 min (the relay accepts a listen timestamp ±10 min).
-	enum PreparedListens {
-		private static let lock = NSLock()
-		private static var bySid: [String: (relay: String, armor: String, at: Date)] = [:]
-
-		static func prepare(_ own: Own) {
-			guard let relay = own.relay, let command = listenCommand(own, relay: relay),
-			      let json = try? JSONSerialization.data(withJSONObject: command, options: []),
-			      let armor = waitResult({ BeamioOpenPgpHost.shared.encrypt(plaintext: json.base64EncodedString(), publicKeyArmor: relay.armor, completion: $0) }),
-			      armor.contains("BEGIN PGP MESSAGE")
-			else { return }
-			lock.lock()
-			bySid[own.channel.sid] = (relay.domain, armor, Date())
-			lock.unlock()
-		}
-
-		static func take(sid: String, relayDomain: String) -> String? {
-			lock.lock()
-			defer { lock.unlock() }
-			let now = Date()
-			bySid = bySid.filter { now.timeIntervalSince($0.value.at) < 300 }
-			guard let hit = bySid.removeValue(forKey: sid), hit.relay == relayDomain else { return nil }
-			return hit.armor
-		}
-
-		static func drop(sids: [String]) {
-			lock.lock()
-			sids.forEach { bySid.removeValue(forKey: $0) }
-			lock.unlock()
-		}
-	}
 }
 
 extension BeamioVoiceV3 {
-	private static let signPathLock = NSLock()
-	nonisolated(unsafe) private static var lastSignPath = ""
-
-	/// v3 channel signing: native secp256k1 first (same bytes as ethers), the SDK's
-	/// crypto WebView only if that fails. Logs the path when it changes.
-	static func nativeOrWebView(_ what: String, native: () -> String?, webView: () -> String?) -> String? {
-		if let n = native() {
-			signPathLock.lock()
-			let changed = lastSignPath != "native"
-			lastSignPath = "native"
-			signPathLock.unlock()
-			if changed { BeamioQALog.write("v3 sign path=native (\(what))") }
-			return n
-		}
-		signPathLock.lock()
-		lastSignPath = "webview"
-		signPathLock.unlock()
-		BeamioQALog.write("v3 sign path=webview (\(what)): native failed")
-		return webView()
-	}
+	/// v3 channel signing: native secp256k1 only (same bytes as ethers). The SDK's WebView sign fallback was removed (S-3).
 }

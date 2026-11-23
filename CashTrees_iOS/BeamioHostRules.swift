@@ -4,6 +4,8 @@
 //
 //  Exact or subdomain match for Beamio hosts (beamio.ca, beamio.app). A substring match would also accept lookalikes
 //  such as beamio.ca.evil.example; this rule does not.
+//  Inbound recognition only (NDEF navigation block). Never use it to allow an outbound request: outbound targets use
+//  the exact lists in `BeamioOutboundHosts`, which exclude the deprecated beamio.app.
 //
 
 import Foundation

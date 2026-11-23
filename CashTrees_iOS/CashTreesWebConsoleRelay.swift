@@ -19,6 +19,16 @@ enum CashTreesWebConsoleRelay {
 
     private static let logger = Logger(subsystem: logSubsystem, category: logCategory)
 
+    /// The page console relay: only Debug and internal QA builds (BEAMIO_QA) forward the page's console text to
+    /// the unified log. A Release or App Store build installs no console proxy, registers no console handler and drops any page console
+    /// text that still arrives (the CashTreesIOS `consoleLog` action), so the page's text never reaches the system log. The proxy script
+    /// is compiled out of Release, and scripts/verify-ios-console-relay-off.sh checks the built app for its marker.
+    #if DEBUG || BEAMIO_QA
+    static let relaysPageConsole = true
+    #else
+    static let relaysPageConsole = false
+    #endif
+
     static func logNative(_ message: String) {
         logger.info("[native] \(message, privacy: .public)")
         debugNSLog("[native] \(message)")
@@ -42,7 +52,8 @@ enum CashTreesWebConsoleRelay {
     }
 
     static func injectionScript() -> String {
-        """
+        #if DEBUG || BEAMIO_QA
+        return """
         (function(){
           if(window.__CT_CONSOLE_PROXY_V4__)return;
           window.__CT_CONSOLE_PROXY_V4__=true;
@@ -130,6 +141,9 @@ enum CashTreesWebConsoleRelay {
           }
         })();
         """
+        #else
+        return ""
+        #endif
     }
 
     static func probeScript() -> String {
@@ -137,6 +151,7 @@ enum CashTreesWebConsoleRelay {
     }
 
     static func reinject(into webView: WKWebView, reason: String) {
+        guard relaysPageConsole else { return }
         let install = injectionScript()
         webView.callAsyncJavaScript(install, arguments: [:], in: nil, in: .page) { result in
             if case .failure(let error) = result {
@@ -170,6 +185,8 @@ enum CashTreesWebConsoleRelay {
     }
 
     private static func emit(level: Any?, message: Any?) {
+        // Release / App Store: the page's console text is dropped before any logging branch (incl. CallTiming's NSLog).
+        guard relaysPageConsole else { return }
         let levelText = (level as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let resolvedLevel = (levelText?.isEmpty == false) ? levelText! : "log"
         let text: String

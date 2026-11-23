@@ -5,8 +5,52 @@ import Foundation
 /// opaque push → `voice_offer_fetch` encrypted to mailbox route PGP →
 /// `POST http://{entryIp}/post` (shell picks an IP ≠ mailbox B) → decrypt with
 /// Keychain user PGP → EIP-191 `callerSignature` → exact-address BeamioTag.
+/// Observable decrypt-failure states of the incoming call (SPEC-incoming-call-decrypt-failure-states-r2-2026-11-20, PWA is the UI basis).
+/// The native triggers are provisional until the iOS SDK confirms them (spec section five).
+enum BeamioDecryptFailureState: String, Equatable {
+    case x19Unlinked = "x19_unlinked"
+    case keyMissing = "key_missing"
+    case passcodeLocked = "passcode_locked"
+    case dataCorrupt = "data_corrupt"
+    case decryptTimeout = "decrypt_timeout"
+    case decryptUnknown = "decrypt_unknown"
+
+    /// The reason code of a failure. `dataCorrupt` carries `key_corrupt` or `cipher_corrupt`; the other states carry their own name.
+    enum Reason: String, Equatable {
+        case x19NotLinked = "x19_not_linked"
+        case keyMissing = "key_missing"
+        case passcodeLocked = "passcode_locked"
+        case keyCorrupt = "key_corrupt"
+        case cipherCorrupt = "cipher_corrupt"
+        case decryptTimeout = "decrypt_timeout"
+        case decryptUnknown = "decrypt_unknown"
+    }
+
+    /// Upper bound of the wait for a decrypt answer. r2 section three gives 10 seconds; whether it applies to decrypt
+    /// requests is pending confirmation by the iOS SDK, so the value is held here until that answer.
+    static let decryptTimeoutSeconds: TimeInterval = 10
+
+    /// The state and reason of one native pgpDecrypt failure (provisional mapping, see the note above).
+    /// Read failures are unknown, retryable, and delete nothing (r2 principles).
+    static func of(_ failure: BeamioNativeWallet.Failure) -> (state: BeamioDecryptFailureState, reason: Reason) {
+        switch failure {
+        case .pending: return (.x19Unlinked, .x19NotLinked)
+        case .locked: return (.passcodeLocked, .passcodeLocked)
+        case .walletKeyMissing, .rejected("no_pgp_key"): return (.keyMissing, .keyMissing)
+        case .rejected("decrypt_failed"), .rejected("pgp_message_shape"): return (.dataCorrupt, .cipherCorrupt)
+        case .storageUnreadable, .signFailed, .rejected: return (.decryptUnknown, .decryptUnknown)
+        }
+    }
+}
+
 enum BeamioVoiceOfferIdentity {
 	/// Plain value; compared off the main thread while an answer waits for its offer.
+	struct OfferEnvelope: Equatable {
+		let text: String
+		let signMessage: String
+		let from: String
+	}
+
 	nonisolated struct Resolved: Equatable {
 		var callerEoa: String
 		var beamioTag: String
@@ -21,6 +65,8 @@ enum BeamioVoiceOfferIdentity {
 		/// Caller's user-PGP public key and mailbox route key (armored), signed in the offer.
 		var callerPgpArmored: String = ""
 		var callerRouteArmored: String = ""
+		/// Signed `expiresAt` of the offer in epoch ms (0 = absent). A late offer past it is refused.
+		var signedExpiresAtMs: Double = 0
 
 		/// Enough to answer or decline: a v3 offer with the caller's keys.
 		var answerable: Bool {
@@ -41,36 +87,79 @@ enum BeamioVoiceOfferIdentity {
 	}
 
 	/// Best-effort; failures leave CallKit on opaque "Beamio".
+	/// One observable decrypt failure: the state, the reason code, and a log line without any secret, ciphertext or plaintext.
+	private static func reportDecryptFailure(
+		_ state: BeamioDecryptFailureState,
+		reason: BeamioDecryptFailureState.Reason,
+		callId: String,
+		failure: ((BeamioDecryptFailureState, String) -> Void)?
+	) {
+		NSLog("[BeamioVoiceOffer] decrypt failure state=%@ reason=%@ %@", state.rawValue, reason.rawValue, redactedCallId(callId))
+		failure?(state, reason.rawValue)
+	}
+
+	/// The log form of a callId: its length only, never its value.
+	static func redactedCallId(_ callId: String) -> String {
+		"callId=<redacted len=\(callId.count)>"
+	}
+
 	static func resolve(
 		callId: String,
 		sessionId: String,
+		failure: ((BeamioDecryptFailureState, String) -> Void)? = nil,
 		completion: @escaping (Resolved?) -> Void
 	) {
-		guard !callId.isEmpty, sessionId.count >= 16,
-		      let secrets = BeamioChatPgpKeychain.load(),
+		// A callId or sessionId that does not fit the format is an input error, not a decrypt state. It is refused here, logged
+		// without the values, and not reported through `failure`.
+		guard !callId.isEmpty, sessionId.count >= 16 else {
+			NSLog("[BeamioVoiceOffer] refused resolve — callId or sessionId does not fit the format (%@)", redactedCallId(callId))
+			completion(nil)
+			return
+		}
+		let pointer = BeamioNativeAccountPointer.get()
+		// The record is judged first (project rule, r2): a missing PGP record is key_missing; a record that cannot be read is
+		// decrypt_unknown, which is retryable. Neither is deleted or overwritten here, and both are reported through `failure`.
+		switch BeamioChatPgpKeychain.recordState(eoa: pointer) {
+		case .absent:
+			reportDecryptFailure(.keyMissing, reason: .keyMissing, callId: callId, failure: failure)
+			completion(nil)
+			return
+		case .unreadable:
+			reportDecryptFailure(.decryptUnknown, reason: .decryptUnknown, callId: callId, failure: failure)
+			completion(nil)
+			return
+		case .present:
+			break
+		}
+		guard let secrets = BeamioChatPgpKeychain.load(eoa: pointer),
 		      secrets.hasUserPrivate,
 		      secrets.hasRoutePublic,
 		      !Self.roster(from: secrets).isEmpty
 		else {
-			NSLog("[BeamioVoiceOffer] skip resolve — missing Keychain PGP/route/IP roster")
+			// The record is present but cannot be used (restore incomplete, route key or roster missing). It is never skipped
+			// silently and never deleted: it is reported as decrypt_unknown, which is retryable.
+			reportDecryptFailure(.decryptUnknown, reason: .decryptUnknown, callId: callId, failure: failure)
 			completion(nil)
 			return
 		}
 
 		fetchOfferArmor(callId: callId, sessionId: sessionId, secrets: secrets) { armor in
 			guard let armor, armor.contains("BEGIN PGP MESSAGE") else {
-				NSLog("[BeamioVoiceOffer] fetch failed callId=%@", callId)
+				// Retrieving the ciphertext failed: a retryable unknown. Nothing is deleted or overwritten.
+				reportDecryptFailure(.decryptUnknown, reason: .decryptUnknown, callId: callId, failure: failure)
 				completion(nil)
 				return
 			}
-			BeamioOpenPgpHost.shared.decrypt(armor: armor, privateKeyArmor: secrets.privateKeyArmor) { result in
-				switch result {
-				case .failure(let err):
-					NSLog("[BeamioVoiceOffer] decrypt failed %@", err.localizedDescription)
-					completion(nil)
-				case .success(let plaintext):
-					parseAndVerify(plaintext: plaintext, callId: callId, sessionId: sessionId, completion: completion)
-				}
+			// PGP decrypt is native-only (BeamioNativeWallet.pgpDecrypt). The reviewed X-19 build
+			// decrypts in process; the offer is parsed and verified below without returning its plaintext to the page.
+			switch BeamioNativeWallet.pgpDecrypt(eoa: secrets.eoa, message: Data(armor.utf8)) {
+			case .failure(let err):
+				let mapped = BeamioDecryptFailureState.of(err)
+				NSLog("[BeamioVoiceOffer] decrypt failure state=%@ reason=%@ %@", mapped.state.rawValue, mapped.reason.rawValue, redactedCallId(callId))
+				failure?(mapped.state, mapped.reason.rawValue)
+				completion(nil)
+			case .success(let plain):
+				parseAndVerify(plaintext: String(decoding: plain, as: UTF8.self), callId: callId, sessionId: sessionId, completion: completion)
 			}
 		}
 	}
@@ -84,21 +173,63 @@ enum BeamioVoiceOfferIdentity {
 		from: String,
 		completion: @escaping (Resolved?) -> Void
 	) {
-		let signer = from.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-		guard signer.hasPrefix("0x"), signer.count == 42 else {
+		// v49 §55: only the chat envelope (text, signMessage, from) is accepted. A bare voice_call_offer JSON is refused:
+		// it does not ring, show, register or answer.
+		guard let envelope = parseEnvelope(line) else {
+			NSLog("[BeamioVoiceOffer] refused: not a chat envelope")
 			completion(nil)
 			return
 		}
-		parseAndVerify(
-			plaintext: line,
-			callId: "",
-			sessionId: "",
-			expectedCallerEoa: signer,
-			completion: completion
-		)
+		let claimed = from.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+		guard claimed.hasPrefix("0x"), claimed.count == 42, envelope.from.lowercased() == claimed else {
+			NSLog("[BeamioVoiceOffer] refused: envelope from does not match the line sender")
+			completion(nil)
+			return
+		}
+		// Outer envelope signature (EIP-191 over text): the recovered address must equal envelope.from.
+		BeamioOpenPgpHost.shared.verifyMessage(text: envelope.text, signature: envelope.signMessage) { verifyResult in
+			switch verifyResult {
+			case .failure(let err):
+				NSLog("[BeamioVoiceOffer] envelope signature failed %@", err.localizedDescription)
+				completion(nil)
+			case .success(let recovered):
+				let signer = recovered.lowercased()
+				guard signer == claimed else {
+					NSLog("[BeamioVoiceOffer] refused: envelope signer %@ != from", signer)
+					completion(nil)
+					return
+				}
+				// The inner offer (its own callerSignature and from) is verified as before.
+				parseAndVerify(
+					plaintext: envelope.text,
+					callId: "",
+					sessionId: "",
+					expectedCallerEoa: signer,
+					completion: completion
+				)
+			}
+		}
+	}
+
+	/// The chat envelope (v49 §55): a JSON object with `text`, `signMessage` and `from`. Nil for anything else,
+	/// including a bare offer (which has `type` and no envelope fields).
+	static func parseEnvelope(_ line: String) -> OfferEnvelope? {
+		guard let data = line.data(using: .utf8),
+		      let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+		      obj["type"] == nil,
+		      let text = obj["text"] as? String,
+		      let signMessage = obj["signMessage"] as? String,
+		      let from = obj["from"] as? String
+		else { return nil }
+		return OfferEnvelope(text: text, signMessage: signMessage, from: from)
 	}
 
 	// MARK: - Fetch
+
+#if BEAMIO_TEST_HOOKS
+	/// Test-only: answers the ciphertext retrieval instead of the network (a nil armor is a failed retrieval). Nil restores the real one.
+	static var fetchOfferArmorOverrideForTests: ((@escaping (String?) -> Void) -> Void)?
+#endif
 
 	private static func fetchOfferArmor(
 		callId: String,
@@ -106,6 +237,12 @@ enum BeamioVoiceOfferIdentity {
 		secrets: BeamioChatPgpKeychain.Secrets,
 		completion: @escaping (String?) -> Void
 	) {
+#if BEAMIO_TEST_HOOKS
+		if let answer = fetchOfferArmorOverrideForTests {
+			answer(completion)
+			return
+		}
+#endif
 		let command: [String: Any] = [
 			"command": "voice_offer_fetch",
 			"callId": callId,
@@ -240,14 +377,28 @@ enum BeamioVoiceOfferIdentity {
 				}
 				if !claimedFrom.isEmpty, claimedFrom.lowercased() != eoa.lowercased() {
 					NSLog(
-						"[BeamioVoiceOffer] claimed from=%@ != recovered=%@",
+						"[BeamioVoiceOffer] claimed from=%@ != recovered=%@ (rejected)",
 						claimedFrom,
 						eoa
 					)
+					completion(nil)
+					return
 				}
 				let toField = (offer["to"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 				let offerCallId = (offer["callId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 				let offerSessionId = (offer["sessionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+				// Dedupe record after verification (v38 §42): quota per recovered R, fail closed when over.
+				let dedupCallId = (offerCallId?.isEmpty == false ? offerCallId! : callId)
+				let dedupSessionId = (offerSessionId?.isEmpty == false ? offerSessionId! : sessionId)
+				let expiresMs = expiresAtMs(of: offer)
+				let admission = expiresMs > 0
+					? BeamioOfferDedupeStore.admit(callId: dedupCallId, sessionId: dedupSessionId, callerEoa: eoa, expiresAtMs: expiresMs, nowMs: nowMs())
+					: BeamioOfferDedupeLedger.Admission.rejectedCallerQuota
+				guard admission == .admitted else {
+					NSLog("[BeamioVoiceOffer] WARNING dedupe refused (%@) callId=%@", "\(admission)", redactedCallId(dedupCallId))
+					completion(nil)
+					return
+				}
 				BeamioTagAddressLookup.fetchExactTag(for: eoa) { tag in
 					let resolved = Resolved(
 						callerEoa: eoa,
@@ -258,7 +409,8 @@ enum BeamioVoiceOfferIdentity {
 						to: toField,
 						proto: Self.protoOf(offer),
 						callerPgpArmored: Resolved.decodeArmor((offer["callerPgp"] as? String) ?? ""),
-						callerRouteArmored: Resolved.decodeArmor((offer["callerRoute"] as? String) ?? "")
+						callerRouteArmored: Resolved.decodeArmor((offer["callerRoute"] as? String) ?? ""),
+						signedExpiresAtMs: expiresAtMs(of: offer)
 					)
 					BeamioNativeVoiceSignaling.rememberOffer(resolved)
 					NSLog(
@@ -272,6 +424,32 @@ enum BeamioVoiceOfferIdentity {
 				}
 			}
 		}
+	}
+
+	/// The signed `expiresAt` in epoch ms (seconds are scaled up); 0 when absent or unreadable.
+	static func expiresAtMs(of offer: [String: Any]) -> Double {
+		let v: Double = (offer["expiresAt"] as? Double) ?? (offer["expiresAt"] as? NSNumber)?.doubleValue
+			?? Double((offer["expiresAt"] as? String) ?? "") ?? 0
+		guard v > 0, v.isFinite else { return 0 }
+		return v < 100_000_000_000 ? v * 1000 : v
+	}
+
+	/// Late-offer rule (v37 §41): an offer is applied only while `now` has not passed its signed expiresAt.
+	/// The clock of the offer path. Production reads the system time; a test build may pin it (BEAMIO_TEST_HOOKS only).
+	static func nowMs() -> Double {
+		#if BEAMIO_TEST_HOOKS
+		if let pinned = nowMsForTests { return pinned }
+		#endif
+		return Date().timeIntervalSince1970 * 1000
+	}
+
+	#if BEAMIO_TEST_HOOKS
+	/// Test only: pins the offer path clock. nil restores the system clock.
+	static var nowMsForTests: Double?
+	#endif
+
+	static func withinSignedExpiry(_ offer: Resolved, nowMs: Double = BeamioVoiceOfferIdentity.nowMs()) -> Bool {
+		offer.signedExpiresAtMs > 0 && nowMs <= offer.signedExpiresAtMs
 	}
 
 	static func extractVoiceOffer(from plaintext: String) -> [String: Any]? {
@@ -327,7 +505,7 @@ enum BeamioVoiceOfferIdentity {
 	}
 
 	/// Canonical text for `callerSignature` (no from / tag / signature itself).
-	private static func buildCallerCanonicalText(offer: [String: Any]) -> String {
+	static func buildCallerCanonicalText(offer: [String: Any]) -> String {
 		func s(_ key: String) -> String {
 			if let v = offer[key] as? String { return v }
 			if let n = offer[key] as? NSNumber { return n.stringValue }
@@ -357,3 +535,17 @@ enum BeamioVoiceOfferIdentity {
 		].joined(separator: "\n")
 	}
 }
+
+#if BEAMIO_TEST_HOOKS
+extension BeamioVoiceOfferIdentity {
+	/// Test-only entry to the production parse-and-verify path (BEAMIO_TEST_HOOKS builds only; absent from release).
+	static func parseAndVerifyForTests(
+		plaintext: String,
+		callId: String,
+		sessionId: String,
+		completion: @escaping (Resolved?) -> Void
+	) {
+		parseAndVerify(plaintext: plaintext, callId: callId, sessionId: sessionId, completion: completion)
+	}
+}
+#endif

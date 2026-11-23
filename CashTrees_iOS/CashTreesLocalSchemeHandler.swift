@@ -30,7 +30,8 @@ final class CashTreesLocalSchemeHandler: NSObject, WKURLSchemeHandler {
             return
         }
 
-        let path = requestURL.path.isEmpty ? "/" : requestURL.path
+        let encodedPath = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? ""
+        let path = encodedPath.isEmpty ? "/" : encodedPath
         guard let fileURL = bundleStore.resolveFileURL(for: path) else {
             urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
             return

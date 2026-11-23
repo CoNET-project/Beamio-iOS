@@ -42,6 +42,14 @@
 			);
 			target = D00281D22F767F0500C91DCF /* CashTrees_iOS */;
 		};
+		A1B2C3D4E5F60718293A4B5C /* Exceptions for "CashTrees_iOSTests" folder in "CashTrees_iOSTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				BeamioTagLookupRedirectTests.swift,
+				CashTreesPWAVersionUpgradeTests.swift,
+			);
+			target = D00281DF2F767F0700C91DCF /* CashTrees_iOSTests */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -55,6 +63,9 @@
 		};
 		D00281E32F767F0700C91DCF /* CashTrees_iOSTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A1B2C3D4E5F60718293A4B5C /* Exceptions for "CashTrees_iOSTests" folder in "CashTrees_iOSTests" target */,
+			);
 			path = CashTrees_iOSTests;
 			sourceTree = "<group>";
 		};
@@ -119,9 +130,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = D00281F42F767F0700C91DCF /* Build configuration list for PBXNativeTarget "CashTrees_iOS" */;
 			buildPhases = (
+				A1B2C3D4E5F60A0B0C0D0E02 /* Verify single PWA ZIP (pre) */,
 				D00281CF2F767F0500C91DCF /* Sources */,
 				D00281D02F767F0500C91DCF /* Frameworks */,
 				D00281D12F767F0500C91DCF /* Resources */,
+				A1B2C3D4E5F60A0B0C0D0E01 /* Embed PWA digests */,
 			);
 			buildRules = (
 			);
@@ -256,6 +269,45 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1B2C3D4E5F60A0B0C0D0E01 /* Embed PWA digests */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/pwa-embed-digest.sh",
+				"$(SRCROOT)/scripts/pwa-tree-digest.sh",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/SilentPassUI.zip",
+			);
+			name = "Embed PWA digests";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/BeamioPWABuild.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/pwa-embed-digest.sh\"\n";
+			alwaysOutOfDate = 1;
+		};
+		A1B2C3D4E5F60A0B0C0D0E02 /* Verify single PWA ZIP (pre) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/verify-ios-prebuild-declared-zip.sh",
+				"$(SRCROOT)/CashTrees_iOS/SilentPassUI.zip",
+			);
+			name = "Verify single PWA ZIP (pre)";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"${SRCROOT}/scripts/verify-ios-prebuild-declared-zip.sh\" \"${SRCROOT}/CashTrees_iOS/SilentPassUI.zip\"\n";
+			alwaysOutOfDate = 1;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		D00281CF2F767F0500C91DCF /* Sources */ = {
@@ -425,7 +477,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = CashTrees_iOS/CashTrees.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 105;
+				CURRENT_PROJECT_VERSION = 109;
 				DEVELOPMENT_TEAM = 23YYTMA7YQ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -468,7 +520,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "CashTrees_iOS/CashTrees-Release.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 105;
+				CURRENT_PROJECT_VERSION = 109;
 				DEVELOPMENT_TEAM = 23YYTMA7YQ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -629,13 +681,14 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
+
+	/* Begin XCRemoteSwiftPackageReference section */
 		D0CC00022FC2000010000002 /* XCRemoteSwiftPackageReference "chat-sdk-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/CoNET-project/chat-sdk-ios.git";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.1.8;
+				kind = revision;
+				revision = 6808166533dd5210b8cb750e395896f846f6a35d;
 			};
 		};
 		D0ZP0002FC10000100000002 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {

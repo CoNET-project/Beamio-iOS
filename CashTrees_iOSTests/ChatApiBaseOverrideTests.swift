@@ -1,7 +1,7 @@
 import Testing
 @testable import CashTrees_iOS
 
-/// The shell sets the chat SDK's apiBaseUrl to beamio.ca on every forwarded `init` (owner ruling 2026-11-17).
+/// The shell sets the chat SDK's apiBaseUrl to beamio.ca on every forwarded `init` (per the project decision).
 struct ChatApiBaseOverrideTests {
     @Test func initWithLegacyHostIsRewrittenToBeamioCa() {
         let out = ChatApiBaseOverride.apply(["type": "init", "reqId": 1,

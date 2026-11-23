@@ -792,10 +792,7 @@ final class BeamioNativeVoiceChannel: NSObject {
 		guard let relay = own.relay else { return nil }
 		var armorOut: String?
 		// Built while the call rang (callee): no signing or encryption on the Answer path.
-		if let prepared = BeamioVoiceV3.PreparedListens.take(sid: own.channel.sid, relayDomain: relay.domain) {
-			armorOut = prepared
-			BeamioQALog.write("voice v3 listen prepared which=\(which)")
-		} else {
+		do {  // pre-signed listens removed: the listen is signed on the Answer path
 			guard let command = BeamioVoiceV3.listenCommand(own, relay: relay),
 			      let jsonData = try? JSONSerialization.data(withJSONObject: command, options: [])
 			else {
@@ -914,7 +911,7 @@ final class BeamioNativeVoiceChannel: NSObject {
 		var own = which == .voice ? v3.ownVoice : v3.ownVideo
 		var exclude: Set<String> = [own.relay?.ip ?? ""]
 		if let mailbox = BeamioSiCipherPost.normalizeIp(BeamioChatPgpKeychain.loadMailboxIp()) { exclude.insert(mailbox) }
-		let avoidArmors = [BeamioChatPgpKeychain.loadRoutePublicArmor(), live.offer.callerRouteArmored]
+		let avoidArmors = [BeamioChatPgpKeychain.loadRoutePublicArmor(eoa: BeamioNativeAccountPointer.get()), live.offer.callerRouteArmored]
 		guard let next = BeamioVoiceV3.RelayNodes.pick(excludeIps: exclude, excludeArmors: avoidArmors) else { return }
 		BeamioQALog.write("voice v3 \(which) relay \(own.relay?.domain ?? "-") did not answer; moving to \(next.domain)")
 		own.relay = next
@@ -1296,19 +1293,13 @@ final class BeamioNativeVoiceChannel: NSObject {
 					return
 				}
 				if type == "voice_end_v1" || type == "voice_call_reject_v1" {
-					// Browser Hang Up often arrives on the AES relay first. Closing
-					// media alone left CallKit/InCall up (v71). Route through the
-					// same end() path as chat voice_end so the shell call screen
-					// dismisses.
-					let endCallId = active.offer.callId
-					let endSessionId = active.offer.sessionId
-					DispatchQueue.main.async {
-						BeamioNativeVoiceSignaling.applyRemoteMediaEnd(
-							callId: endCallId,
-							sessionId: endSessionId
-						)
-						self.stop()
-					}
+					// v71 §78 (a): a state frame does not drive the call. The channel key proves the channel end, not the
+					// caller identity in the frame, and a from match alone is not enough. Until the signed control frame
+					// (sig, EIP-191, canonical text; v71 §78 b) is verified, this state frame is dropped. Hang-up reaches the
+					// peer through the verified chat path.
+					BeamioQALog.write("voice channel state frame dropped (unverified control frame)")
+					return
+					// Dropped above (v71 §78 a): the unreachable local teardown that followed was removed.
 				}
 				return
 			}

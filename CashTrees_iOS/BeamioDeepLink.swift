@@ -2,7 +2,7 @@
 //  BeamioDeepLink.swift
 //  CashTrees_iOS
 //
-//  Universal Links (https://beamio.ca/app/...; legacy https://beamio.app/... still parsed) + custom scheme (beamio://open?...).
+//  Universal Links (https://beamio.app/...) + custom scheme (beamio://open?...).
 //
 
 import Combine
@@ -96,8 +96,7 @@ enum BeamioDeepLink {
     /// Embedded SilentPassUI served by `WKURLSchemeHandler` on device (`cashtrees-local://localhost/`).
     static let localWebAppBaseURL = URL(string: "\(CashTreesPWAScheme.scheme)://\(CashTreesPWAScheme.host)/")!
 
-    /// HTTPS hosts the WebView may load from deep links (allowlist). beamio.ca is the current host; the legacy
-    /// beamio.app hosts are still accepted when parsing an incoming link, but nothing generates them any more.
+    /// HTTPS hosts the WebView may load from deep links (allowlist).
     static let allowedWebHosts: Set<String> = [
         "beamio.ca",
         "www.beamio.ca",
@@ -108,10 +107,10 @@ enum BeamioDeepLink {
     ]
 
     /// Universal Link path prefixes handled by this consumer shell.
-    /// AASA on beamio.ca also lists `/app-download` (unwrapped below). POS must not claim these paths.
+    /// AASA on beamio.app also lists `/app-download` (unwrapped below). POS must not claim these paths.
     static let universalLinkPathPrefixes = ["/app"]
 
-    /// Share / install landing: unwrap `?target=https://beamio.ca/app/…` (or a legacy beamio.app target) to the inner PWA URL.
+    /// Share / install landing: unwrap `?target=https://beamio.app/app/…` to the inner PWA URL.
     ///
     /// `/app-download` must never load inside the native WKWebView — it is the homepage SPA,
     /// not SilentPassUI `/app/`, and can strand the launch splash on a loading interstitial.
@@ -150,7 +149,7 @@ enum BeamioDeepLink {
         return inviteOnly
     }
 
-    /// Build `https://beamio.ca/app/?invite=<eoa>` for invite-only landings.
+    /// Build `https://beamio.ca/app/?invite=<eoa>` (`defaultWebAppURL`) for invite-only landings.
     private static func webAppURLWithInvite(_ invite: String) -> URL? {
         var merged = URLComponents(url: defaultWebAppURL, resolvingAgainstBaseURL: false)
         merged?.queryItems = [URLQueryItem(name: "invite", value: invite)]
@@ -533,17 +532,7 @@ enum BeamioDeepLink {
         BeamioVoipIncomingBootstrap.shared.callKit.writeBusyQaBreadcrumb(
             "debug-remote-end:\(callId):sid=\(sessionId)"
         )
-        let run = {
-            BeamioNativeVoiceSignaling.applyRemoteMediaEnd(
-                callId: callId,
-                sessionId: sessionId
-            )
-        }
-        if Thread.isMainThread {
-            run()
-        } else {
-            DispatchQueue.main.async(execute: run)
-        }
+        // v72 (1): a deep link end drives no call state (no signature on the link).
         return true
     }
 

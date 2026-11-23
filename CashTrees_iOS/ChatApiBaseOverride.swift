@@ -2,10 +2,10 @@
 //  ChatApiBaseOverride.swift
 //  CashTrees_iOS
 //
-//  The chat SDK (ConetChatSDK) keeps a default `apiBaseUrl` of https://beamio.app/api and takes its value from the
-//  `init` payload (`payload.apiBaseUrl`). This shell sets the value explicitly on every `init` it forwards, so no path
-//  falls back to the old host. The SDK constant itself is not changed (SDK sources are not edited in the shell).
-//  Owner ruling (2026-11-17): the 105 build moves its native requests to beamio.ca.
+//  The chat SDK (ConetChatSDK) defaults `apiBaseUrl` to https://beamio.ca/api and takes its value from the `init`
+//  payload (`payload.apiBaseUrl`) when one is given. This shell sets the value explicitly on every `init` it forwards,
+//  so a page value can never point native chat requests at another host.
+//  Per the project decision, the 105 build moves its native requests to beamio.ca.
 //
 
 import Foundation

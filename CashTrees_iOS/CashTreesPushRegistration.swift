@@ -296,7 +296,7 @@ enum CashTreesPushRegistration {
 				callId,
 				sessionId
 			)
-			BeamioNativeVoiceSignaling.applyRemoteMediaEnd(callId: callId, sessionId: sessionId)
+			// v72 (1): a push end drives no call state (no signature on the push). Ringing calls end by their ring timeout.
 			return true
 		}
 		let peerAddress = (userInfo["peerAddress"] as? String)
