@@ -2,16 +2,17 @@
   "status": "frozen",
   "not_frozen": false,
   "freeze_kind": "pm-delegated-freeze",
-  "version": "0.53.46",
-  "zip_name": "SilentPassUI-0.53.46.zip",
-  "zip_sha256": "d74bb4031ac3960aa6c5c30ff40faf92f3ff0eeeba4088f3380b29430224733b",
-  "commit": "858035889668036139c9fb46b2ea52c8574afec4",
-  "main_bundle": "static/js/main.e9ba5be3.js",
+  "version": "0.53.47",
+  "zip_name": "SilentPassUI-0.53.47.zip",
+  "zip_sha256": "9f8969d372ebf81907cd64e2d65c78f2c264ad9af4159b0a46b7b83d13844bc6",
+  "commit": "32b504d81ed8956bbe33297c0fd649787bc63a83",
+  "main_bundle": "static/js/main.cdf2e5cd.js",
   "file_count": 104,
   "void": [
     "427b9b0928a0f515924e413922df3b9953228d31780fb786aeb88d5a07771998",
     "647eb2bd3cb963860271e9d44c60104804017f14c9cdb00605f06a3cd295bb9b",
     "58044931a99f3f3413379ff0a762ab5b3aa57a6b02d1111f5cd80ead3b329180",
-    "e2aae609073934ce31a3248291416408a18fea521eb71e8c81b1ff805ed61b91"
+    "e2aae609073934ce31a3248291416408a18fea521eb71e8c81b1ff805ed61b91",
+    "d74bb4031ac3960aa6c5c30ff40faf92f3ff0eeeba4088f3380b29430224733b"
   ]
 }
