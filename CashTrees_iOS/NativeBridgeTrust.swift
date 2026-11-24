@@ -116,8 +116,7 @@ enum NativeBridgeTrust {
         zipMatches: @autoclosure () -> Bool,
         activeBundleMatches: @autoclosure () -> Bool
     ) -> Bool {
-        guard frameDocumentURL != nil,
-              frameDocumentURL?.absoluteString == committedDocumentURL?.absoluteString,
+        guard sameDocument(frameDocumentURL, committedDocumentURL),
               generationMatches()
         else { return false }
         guard zipMatches() else { return false }
@@ -130,6 +129,20 @@ enum NativeBridgeTrust {
             embeddedZipSHA256: expectedEmbeddedZipSHA256,
             activeTreeSHA256: expectedActiveTreeSHA256
         )
+    }
+
+    /// The frame's document is the committed document: both present and equal in everything but the fragment (scheme, user,
+    /// host, port, path, query). The fragment carries the page's client-side route (HashRouter, for example `#/chat`) and does
+    /// not change the document. A URL that cannot be split into components is never the same document.
+    static func sameDocument(_ frame: URL?, _ committed: URL?) -> Bool {
+        guard let frame, let committed,
+              var a = URLComponents(url: frame, resolvingAgainstBaseURL: false),
+              var b = URLComponents(url: committed, resolvingAgainstBaseURL: false)
+        else { return false }
+        a.fragment = nil
+        b.fragment = nil
+        guard let ua = a.url?.absoluteString, let ub = b.url?.absoluteString else { return false }
+        return ua == ub
     }
 
     /// The embedded SilentPassUI.zip matches the pinned digest.
