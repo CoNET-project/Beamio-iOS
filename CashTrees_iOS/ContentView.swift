@@ -1583,6 +1583,13 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         ) {
             passcodeReplyProxy.record(proxy)
         }
+        // External links are not gated by the bundle trust check (BeamioExternalURL); only the URL rules apply there.
+        // Every other action keeps the trust check below.
+        if BeamioBridgeRoute.route(action: action, trusted: trustedNativeSource) == .openExternal {
+            let url = body["url"] as? String
+            DispatchQueue.main.async { BeamioExternalURL.open(url, opener: BeamioExternalURL.systemOpener) }
+            return
+        }
         guard trustedNativeSource else {
             if action == "chatModuleCommand" {
                 let command = body["command"] as? [String: Any] ?? body
@@ -1813,9 +1820,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
             }
         case "webContentReady":
             DispatchQueue.main.async { [weak self] in self?.beginInitialWebHandoffIfNeeded() }
-        case "openURL":
-            let url = body["url"] as? String
-            DispatchQueue.main.async { [weak self] in self?.openExternalURLFromBridge(url) }
         case "openInAppBrowser":
             let inAppUrl = body["url"] as? String
             let inAppRequestId = body["requestId"] as? String
@@ -2138,22 +2142,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
-    /// PWA `CashTreesIOS.openURL({ url })` — http(s)/mailto/tel, plus catalog wallet schemes.
-    /// Native opens the PWA URL as-is; do not invent package or scheme URLs.
-    private static let allowedExternalURLSchemes: Set<String> = [
-        "http", "https", "mailto", "tel",
-        // EIP-681 (`ethereum:0x…@8453/transfer?…`) for Coinbase Wallet / system wallet handoff.
-        "ethereum",
-        "metamask", "cbwallet", "coinbase", "base",
-        "okx", "okex", "tpdapp", "tpoutside", "phantom", "trust",
-    ]
-
-    private func openExternalURLFromBridge(_ raw: String?) {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else { return }
-        guard Self.allowedExternalURLSchemes.contains(scheme) else { return }
-        UIApplication.shared.open(url, options: [:], completionHandler: nil)
-    }
 
     /// Full-screen in-app WebView (bottom → top via `coverVertical`). Top Back closes; title = domain.
     /// On dismiss, PWA receives `cashtreesios` `{ action: "inAppBrowserClosed", requestId, url }`.
