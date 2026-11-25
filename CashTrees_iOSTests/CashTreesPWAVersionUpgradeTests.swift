@@ -45,9 +45,11 @@ struct CashTreesPWAVersionUpgradeTests {
 
     @Test func normalUpgradeReplacesTheActivePackage() throws {
         let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
-        let store = CashTreesPWABundleStore(testRootDir: root)
+        let signer = OtaTestSigner()
+        let store = CashTreesPWABundleStore(testRootDir: root, otaKeys: [signer.publicKey])
         try writeBundle(at: store.activeDir, ver: "0.52.931")
-        try writeBundle(at: store.stagingDir, ver: Self.hotfix)
+        let hotfix = try OtaBundleFixture.make(index: "hotfix", ver: Self.hotfix)
+        try hotfix.placeSignedStaging(root: root, signer: signer)
         try store.promoteStagingToActive()
         #expect(store.activeVersion() == Self.hotfix)
         #expect(!FileManager.default.fileExists(atPath: store.stagingDir.path))
@@ -55,16 +57,19 @@ struct CashTreesPWAVersionUpgradeTests {
 
     @Test func failedDownloadKeepsTheOldPackageAndOtherData() throws {
         let root = try tempRoot(); defer { try? FileManager.default.removeItem(at: root) }
-        let store = CashTreesPWABundleStore(testRootDir: root)
+        let signer = OtaTestSigner()
+        let store = CashTreesPWABundleStore(testRootDir: root, otaKeys: [signer.publicKey])
         try writeBundle(at: store.activeDir, ver: "0.52.932")
         let other = root.appendingPathComponent("other-user-data.txt")
         try "keep".write(to: other, atomically: true, encoding: .utf8)
-        // A download that is not a ZIP fails to unzip: nothing is staged, the active package and other data stay.
+        // A download that is not a ZIP: nothing is staged, the active package and other data stay.
         let bad = root.appendingPathComponent("bad.zip")
         try "not a zip".write(to: bad, atomically: true, encoding: .utf8)
-        #expect(throws: (any Error).self) {
-            try store.installDownloadToStaging(from: bad, expectedVersion: Self.hotfix)
-        }
+        let fixture = try OtaBundleFixture.make(index: "x", ver: Self.hotfix)
+        let manifest = try #require(CashTreesPWAOtaVerifier(trustedKeys: [signer.publicKey], shellBuild: 999)
+            .verifySignedObject(signer.storedObject(fixture.payload(), ver: Self.hotfix, filename: fixture.filename)).manifest)
+        let verdict = try store.installDownloadToStaging(zip: bad, manifest: manifest, signedObject: Data())
+        #expect(verdict == .noncanonicalZip)
         #expect(store.activeVersion() == "0.52.932")
         #expect(store.pendingVersion == nil)
         #expect((try? String(contentsOf: other, encoding: .utf8)) == "keep")

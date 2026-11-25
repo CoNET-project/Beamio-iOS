@@ -37,7 +37,7 @@ enum CashTreesPWAScheme {
     }
 }
 
-struct CashTreesPWAUpdateInfo: Codable, Equatable {
+nonisolated struct CashTreesPWAUpdateInfo: Codable, Equatable {
     let ver: String
     let filename: String
 }

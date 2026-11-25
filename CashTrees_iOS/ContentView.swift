@@ -307,6 +307,10 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
     override init() {
         super.init()
         CashTreesNativeRecoveryRoute.installOnce()
+        CashTreesG0PrivacyShield.shared.installOnce()
+        CashTreesNativeAccountCreateRoute.installOnce()
+        // Every cold start, before the WebView exists: keep the page's website data out of backups (the flag comes back after a rebuild).
+        CashTreesWebsiteDataBackupExclusion.apply()
         // PushKit + CallKit live in BeamioVoipIncomingBootstrap (AppDelegate).
         // Wire Answer/End into the WebView once the shell is up.
         BeamioVoipIncomingBootstrap.shared.setWebBridge { [weak self] action, callId, sessionId in
@@ -835,6 +839,9 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
             committedMainDocumentURL = nil
         }
         pendingMainDocumentTreeSHA256 = nil
+        // A new main document: the page that opened a recovery session is gone.
+        CashTreesRecoverySession.shared.reset()
+        CashTreesAccountCreateSession.shared.pageLeft()
         CashTreesWebConsoleRelay.reinject(into: webView, reason: "didCommit")
     }
 
@@ -875,6 +882,8 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
     /// iOS often kills the WKWebView content process after long background; reload on terminate or next foreground.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         cancelWebContentLivenessProbe()
+        CashTreesRecoverySession.shared.reset()
+        CashTreesAccountCreateSession.shared.pageLeft()
         webContentProcessNeedsReload = true
         initialWebRenderReadySignaled = false
         loadState?.beginRecovery()
@@ -1137,7 +1146,18 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         let nfcEsc = esc(nfcStatus)
         let verEsc = esc(embeddedVer)
         let pendingEsc = esc(pendingVer)
+        let qaCaps: String
+        #if BEAMIO_QA_OTA
+        // QA builds only: declare the shell OTA capability so the page offers "apply update" for the signed staging.
+        qaCaps = "window.__CT_IOS_CAPS__=Object.assign(window.__CT_IOS_CAPS__||{},{'pwa.embedded-ota.v1':true});"
+        #else
+        qaCaps = ""
+        #endif
+        // The PWA recovery page hands its input to the headless engine (nativeRecoverySubmit / nativeRecoveryCancel).
+        let recoveryCaps = "window.__CT_IOS_CAPS__=Object.assign(window.__CT_IOS_CAPS__||{},{'\(CashTreesRecoveryBridge.capability)':true,'\(CashTreesAccountCreateBridge.capability)':true});"
         return """
+        \(recoveryCaps)
+        \(qaCaps)
         window.__CT_IOS_NFC_STATUS__='\(nfcEsc)';
         window.__CT_EMBEDDED_PWA_VER__='\(verEsc)';
         window.__CT_EMBEDDED_PWA_PENDING_VER__='\(pendingEsc)';
@@ -1188,12 +1208,23 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 requestId:payload.requestId||''
               });
             },
-            scanRecoveryQr:function(payload){
+            nativeRecoverySubmit:function(payload){
               payload=payload||{};
-              window.webkit.messageHandlers[H].postMessage({
-                action:'scanRecoveryQr',
-                requestId:payload.requestId||''
-              });
+              var m={action:'nativeRecoverySubmit',path:payload.path};
+              if(payload.path==='code'){m.code=payload.code;}
+              else if(payload.path==='account'){m.name=payload.name;m.password=payload.password;}
+              window.webkit.messageHandlers[H].postMessage(m);
+            },
+            nativeRecoveryCancel:function(){
+              window.webkit.messageHandlers[H].postMessage({action:'nativeRecoveryCancel'});
+            },
+            accountCreateRegister:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'accountCreateRegister',reqId:payload.reqId,tag:payload.tag,password:payload.password});
+            },
+            secureScreen:function(payload){
+              payload=payload||{};
+              window.webkit.messageHandlers[H].postMessage({action:'secureScreen',on:payload.on===true});
             },
             scanQr:function(payload){
               payload=payload||{};
@@ -1539,6 +1570,11 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        // The window channel window.BeamioShellRecord (spec r3oq (a)): its own handler name; the CashTreesIOS path below is unchanged.
+        if message.name == CashTreesShellRecordWindow.handlerName {
+            handleShellRecordWindowMessage(message)
+            return
+        }
         if message.name == CashTreesWebConsoleRelay.handlerName {
             let frame = message.frameInfo
             guard NativeBridgeTrust.currentBundleIsTrusted(
@@ -1570,6 +1606,48 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         if let command = PwaWalletSyncBridge.walletSyncCommand(in: body) {
             pwaWalletSyncGate.handle(command: command, trustedOrigin: trustedNativeSource) { [weak self] ack in
                 DispatchQueue.main.async { self?.dispatchIOSBridgeJsonToWeb(ack) }
+            }
+            return
+        }
+        // The PWA recovery page's input goes to the headless engine. Main frame, fixed local origin and bundle trust, each checked, or origin_refused.
+        // The body is never logged; the answer carries the action and the outcome only.
+        if CashTreesRecoveryBridge.handles(action) {
+            let trusted = CashTreesRecoveryBridge.isTrustedSource(
+                isMainFrame: frame.isMainFrame,
+                scheme: frame.securityOrigin.protocol,
+                host: frame.securityOrigin.host,
+                port: frame.securityOrigin.port,
+                bundleTrusted: trustedNativeSource
+            )
+            let answer = CashTreesRecoveryBridge.answer(action: action, body: body, trusted: trusted, session: CashTreesRecoverySession.shared)
+            dispatchIOSBridgeJsonToWeb(answer)
+            return
+        }
+        // New-account onboarding on the PWA page: accountCreateRegister and secureScreen, with the same per-message source checks.
+        if CashTreesAccountCreateBridge.handles(action) {
+            let trusted = CashTreesRecoveryBridge.isTrustedSource(
+                isMainFrame: frame.isMainFrame,
+                scheme: frame.securityOrigin.protocol,
+                host: frame.securityOrigin.host,
+                port: frame.securityOrigin.port,
+                bundleTrusted: trustedNativeSource
+            )
+            if action == CashTreesAccountCreateBridge.secureScreenAction {
+                dispatchIOSBridgeJsonToWeb(CashTreesAccountCreateBridge.secureScreenAnswer(body: body, trusted: trusted, shield: CashTreesG0PrivacyShield.shared))
+                return
+            }
+            guard trusted else {
+                dispatchIOSBridgeJsonToWeb(CashTreesAccountCreateBridge.refusal(reqId: body["reqId"], error: "origin_refused"))
+                return
+            }
+            guard let command = CashTreesAccountCreateBridge.registerCommand(from: body) else {
+                dispatchIOSBridgeJsonToWeb(CashTreesAccountCreateBridge.refusal(reqId: body["reqId"], error: "bad_request"))
+                return
+            }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                BeamioConetChatModule.handleCommand(command) { payload in
+                    DispatchQueue.main.async { self?.dispatchIOSBridgeJsonToWeb(payload) }
+                }
             }
             return
         }
@@ -1623,11 +1701,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
             let mimeType = body["mimeType"] as? String
             let requestId = body["requestId"] as? String
             saveFile(dataUrl: dataUrl, filename: filename, mimeType: mimeType, requestId: requestId)
-        case "scanRecoveryQr":
-            let requestId = body["requestId"] as? String
-            DispatchQueue.main.async { [weak self] in
-                self?.presentGeneralQRScanner(requestId: requestId, filter: .recoveryCodeOnly, bridgeAction: "scanRecoveryQr")
-            }
         case "scanQr":
             let requestId = body["requestId"] as? String
             DispatchQueue.main.async { [weak self] in
@@ -1961,6 +2034,11 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 ])
                 return
             }
+            // accountCreateRegister is accepted only as the trusted page action above, never over chatModuleCommand.
+            if (command["type"] as? String) == CashTreesAccountCreateBridge.registerAction {
+                dispatchIOSBridgeJsonToWeb(CashTreesAccountCreateBridge.refusal(reqId: command["reqId"], error: "origin_refused"))
+                return
+            }
             guard NativeBridgeTrust.allowsPageCommand(command["type"] as? String ?? "") else {
                 dispatchIOSBridgeJsonToWeb([
                     "action": "chatModuleEvent",
@@ -2250,7 +2328,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 bridgeAction: bridgeAction,
                 ok: false,
                 text: nil,
-                recoveryCode: nil,
                 error: "no_presenter",
                 requestId: rid
             )
@@ -2265,7 +2342,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 bridgeAction: bridgeAction,
                 ok: true,
                 text: bridgeAction == "scanQr" ? text : nil,
-                recoveryCode: bridgeAction == "scanRecoveryQr" ? text : nil,
                 error: nil,
                 requestId: rid
             )
@@ -2280,7 +2356,7 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
             case .cameraPermissionDenied:
                 error = "camera_permission_denied"
             case .qrNotFound:
-                error = bridgeAction == "scanRecoveryQr" ? "recovery_qr_not_found" : "qr_not_found"
+                error = "qr_not_found"
             case .unsupportedFile:
                 error = "unsupported_file"
             }
@@ -2288,7 +2364,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 bridgeAction: bridgeAction,
                 ok: false,
                 text: nil,
-                recoveryCode: nil,
                 error: error,
                 requestId: rid
             )
@@ -2650,7 +2725,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         bridgeAction: String,
         ok: Bool,
         text: String?,
-        recoveryCode: String?,
         error: String?,
         requestId: String
     ) {
@@ -2661,9 +2735,6 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         ]
         if let text = text, !text.isEmpty {
             dict["text"] = text
-        }
-        if let recoveryCode = recoveryCode, !recoveryCode.isEmpty {
-            dict["recoveryCode"] = recoveryCode
         }
         if let error = error, !error.isEmpty {
             dict["error"] = error
@@ -2688,6 +2759,43 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
                 return top
             }
         }
+    }
+
+    /// One message on window.BeamioShellRecord: judged per message (main frame, fixed origin, trusted bundle), routed to the SDK handler
+    /// of its command, and answered on the page's onmessage. The body is never logged.
+    private func handleShellRecordWindowMessage(_ message: WKScriptMessage) {
+        let frame = message.frameInfo
+        let bundleTrusted = NativeBridgeTrust.currentBundleIsTrusted(
+            isMainFrame: frame.isMainFrame,
+            scheme: frame.securityOrigin.protocol,
+            host: frame.securityOrigin.host,
+            port: frame.securityOrigin.port,
+            documentTreeSHA256: committedMainDocumentTreeSHA256,
+            frameDocumentURL: frame.request.url,
+            committedDocumentURL: committedMainDocumentURL
+        )
+        let trust = CashTreesShellRecordWindow.trust(
+            isMainFrame: frame.isMainFrame,
+            scheme: frame.securityOrigin.protocol,
+            host: frame.securityOrigin.host,
+            port: frame.securityOrigin.port,
+            bundleTrusted: bundleTrusted
+        )
+        CashTreesShellRecordWindow.handle(
+            body: message.body,
+            trust: trust,
+            syncGate: { [weak self] command, trusted, reply in
+                guard let self else { return }
+                self.pwaWalletSyncGate.handle(command: command, trustedOrigin: trusted, reply: reply)
+            },
+            emit: { [weak self] reply in
+                // §25.52Y.44 item 7: the reply goes back to the frame that sent the message (never to the main frame for a child frame's message).
+                DispatchQueue.main.async {
+                    guard let webView = self?.webView else { return }
+                    CashTreesShellRecordWindow.deliver(reply, trust: trust, to: frame, in: webView)
+                }
+            }
+        )
     }
 
     /// The proxy of the committed main document now, or nil when the trust gate fails for it (remote, changed, not loaded).
@@ -2753,7 +2861,7 @@ final class CashTreesWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegat
         let js = """
         (function(){try{var d=\(payload);\
         window.dispatchEvent(new CustomEvent('cashtreesios',{detail:d}));\
-        if(d&&d.ok&&(d.action==='scanQr'||d.action==='scanRecoveryQr')){try{window.focus&&window.focus();}catch(_){}}\
+        if(d&&d.ok&&d.action==='scanQr'){try{window.focus&&window.focus();}catch(_){}}\
         }catch(e){}})();
         """
         DispatchQueue.main.async {
@@ -2972,6 +3080,8 @@ struct CashTreesWebView: UIViewRepresentable {
         // Register handlers BEFORE user scripts so documentStart bridge can see
         // messageHandlers.CashTreesIOS (otherwise CashTreesIOS never installs).
         config.userContentController.add(coord, name: cashTreesIOSWKHandlerName)
+        // window.BeamioShellRecord (spec r3oq (a)): its own handler; the object is defined by the script below on the fixed origin only.
+        config.userContentController.add(coord, name: CashTreesShellRecordWindow.handlerName)
         if CashTreesWebConsoleRelay.relaysPageConsole {
             config.userContentController.add(coord.webConsoleMessageHandler, name: CashTreesWebConsoleRelay.handlerName)
             CashTreesWebConsoleRelay.logNative("registered handlers CashTreesIOS + \(CashTreesWebConsoleRelay.handlerName)")
@@ -2985,6 +3095,9 @@ struct CashTreesWebView: UIViewRepresentable {
         )
         config.userContentController.addUserScript(
             WKUserScript(source: bridge, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+        config.userContentController.addUserScript(
+            WKUserScript(source: CashTreesShellRecordWindow.injectionScript(), injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
         let renderReady = CashTreesWebCoordinator.renderReadyInjectionScript()
         config.userContentController.addUserScript(
@@ -3030,6 +3143,7 @@ struct CashTreesWebView: UIViewRepresentable {
         uiView.navigationDelegate = nil
         uiView.uiDelegate = nil
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: cashTreesIOSWKHandlerName)
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: CashTreesShellRecordWindow.handlerName)
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: CashTreesWebConsoleRelay.handlerName)
         coordinator.webView = nil
         coordinator.passcodeReplyProxy.reset()
@@ -3169,6 +3283,14 @@ struct ContentView: View {
                     }
                 )
                 .zIndex(5)
+            }
+            // The local PWA could not be prepared. Show the error and a retry control instead of an
+            // endless splash. Native only; no page data is involved.
+            if !localPWAHost.isReady, let error = localPWAHost.lastError {
+                CashTreesStartErrorView(kind: localPWAHost.errorKind, detail: error) {
+                    localPWAHost.retryStart()
+                }
+                .zIndex(6)
             }
             // Shell-answered InCall (see BeamioInCallScreenModel). When the app
             // is `.active`, the model tears down the staging host window so this

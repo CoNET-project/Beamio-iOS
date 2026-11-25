@@ -1,13 +1,19 @@
 import ConetChatSDK
+import Foundation
 import UIKit
 
-/// Native recovery page (spec v1.1-r3u §25.42.4). Two paths: A, the recovery code; B, account name and password.
-/// The shell only hosts the page. It checks the input format, hands the secret to the SDK recovery engine as bytes it
-/// then wipes, and shows the result code. It never parses, decrypts or derives anything and calls no HTTP API.
+/// Onboarding recovery without a native page. The recovery form is the PWA page; the shell has no recovery UI.
 ///
-/// Wired to the SDK: `BeamioNativeRecovery.onRecoveryRequired` presents the page and returns whether it is
-/// open (§25.41.3); each attempt runs `BeamioNativeRecovery.restore` off the main queue and reports with `finish`.
-/// Without X-19 the engine answers `not_supported`, shown as "not available on this device".
+/// - `nativeRecoveryOpen` (SDK command) calls `BeamioNativeRecovery.onRecoveryRequired`. The shell only opens a session and
+///   answers true; nothing is presented.
+/// - The trusted PWA (main frame, verified bundle) sends `nativeRecoverySubmit` with the recovery code, or the BeamioTag and
+///   password. The shell turns the secret into bytes, hands it to the SDK recovery engine off the main queue and wipes its
+///   copy. The SDK sends the one `nativeRecoveryResult` for the session (reqId of the open) through `finish`.
+/// - `nativeRecoveryCancel`, a page reload or navigation, a content-process exit, or more than `backgroundTimeout` in the background
+///   ends the session with `cancelled`.
+/// - The engine itself refuses a device that already has a native key (`already_exists`); nothing is switched or overwritten.
+///
+/// Nothing here logs, stores or echoes a code, a name or a password; only the action and the result code are written.
 
 /// Result codes of `nativeRecoveryResult` (§25.42.8).
 enum CashTreesRecoveryCode: String, CaseIterable {
@@ -25,46 +31,41 @@ enum CashTreesRecoveryCode: String, CaseIterable {
     case notSupported = "not_supported"
 }
 
-/// What the page hands to the engine. The secret is bytes the engine wipes after use; the page wipes its own copy.
+/// What reaches the engine. The secret is bytes the engine wipes after use.
 enum CashTreesRecoveryRequest {
     case code(secret: [UInt8])
     case account(name: String, password: [UInt8])
 }
 
-/// The engine seam: `CashTreesSdkRecoveryEngine` in the app, a fake in tests.
+/// The engine seam: `CashTreesSdkRecoveryEngine` in the app, a fake in tests. `restore` runs off the main queue.
 protocol CashTreesRecoveryEngine: AnyObject {
-    /// One submit; `done` is called on the main queue with the code and, for `backoff`, the remaining seconds.
-    func submit(_ request: CashTreesRecoveryRequest, done: @escaping (CashTreesRecoveryCode, Int?) -> Void)
-    /// The page closed. `hadResult` false means the SDK sends `cancelled` (§25.42.8).
-    func pageClosed(hadResult: Bool)
+    /// One attempt. Returns the result code, the account (ok only) and the cooldown (backoff only). Wipes the secret.
+    func restore(_ request: CashTreesRecoveryRequest) -> (code: CashTreesRecoveryCode, eoa: String?, cooldownSec: Int?)
+    /// Sends the session's result to the page (the SDK `nativeRecoveryResult`). Main queue.
+    func finish(_ code: CashTreesRecoveryCode, eoa: String?, cooldownSec: Int?)
 }
 
-/// The SDK engine (BeamioNativeRecovery, spec 25.42.5). `restore` reads the chain, so it runs off the main queue.
-/// Each outcome goes to the open page and to the bridge (`finish`); closing before any result sends `cancelled`.
+/// The SDK engine (BeamioNativeRecovery, spec 25.42.5).
 final class CashTreesSdkRecoveryEngine: CashTreesRecoveryEngine {
-    func submit(_ request: CashTreesRecoveryRequest, done: @escaping (CashTreesRecoveryCode, Int?) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let outcome: BeamioNativeRecovery.RestoreOutcome
-            switch request {
-            case .code(var bytes):
-                // The SDK takes the code as a String (recorded limit: Swift strings cannot be wiped, §25.42.9).
-                let code = String(decoding: bytes, as: UTF8.self)
-                for i in bytes.indices { bytes[i] = 0 }
-                outcome = BeamioNativeRecovery.restore(.recoveryCode(code))
-            case .account(let name, var password):
-                outcome = BeamioNativeRecovery.restore(.account(name: name, password: password))
-                for i in password.indices { password[i] = 0 }
-            }
-            let (code, eoa, cooldown) = Self.map(outcome)
-            DispatchQueue.main.async {
-                BeamioNativeRecovery.finish(code, eoa: eoa, cooldownSec: cooldown)
-                done(CashTreesRecoveryCode(rawValue: code.rawValue) ?? .notSupported, cooldown)
-            }
+    func restore(_ request: CashTreesRecoveryRequest) -> (code: CashTreesRecoveryCode, eoa: String?, cooldownSec: Int?) {
+        let outcome: BeamioNativeRecovery.RestoreOutcome
+        switch request {
+        case .code(var bytes):
+            // The SDK takes the code as a String (recorded limit: Swift strings cannot be wiped, §25.42.9).
+            let code = String(decoding: bytes, as: UTF8.self)
+            for i in bytes.indices { bytes[i] = 0 }
+            outcome = BeamioNativeRecovery.restore(.recoveryCode(code))
+        case .account(let name, var password):
+            outcome = BeamioNativeRecovery.restore(.account(name: name, password: password))
+            for i in password.indices { password[i] = 0 }
         }
+        let (code, eoa, cooldown) = Self.map(outcome)
+        return (CashTreesRecoveryCode(rawValue: code.rawValue) ?? .notSupported, eoa, cooldown)
     }
 
-    func pageClosed(hadResult: Bool) {
-        if !hadResult { BeamioNativeRecovery.finish(.cancelled) }
+    func finish(_ code: CashTreesRecoveryCode, eoa: String?, cooldownSec: Int?) {
+        let sdkCode = BeamioNativeRecovery.ResultCode(rawValue: code.rawValue) ?? .notSupported
+        BeamioNativeRecovery.finish(sdkCode, eoa: eoa, cooldownSec: cooldownSec)
     }
 
     static func map(_ o: BeamioNativeRecovery.RestoreOutcome) -> (BeamioNativeRecovery.ResultCode, String?, Int?) {
@@ -76,44 +77,191 @@ final class CashTreesSdkRecoveryEngine: CashTreesRecoveryEngine {
     }
 }
 
-/// Presents the page for the SDK (`onRecoveryRequired`).
+/// The headless recovery session. Main-queue state; one submit in flight at a time.
+final class CashTreesRecoverySession {
+    static let shared = CashTreesRecoverySession()
+
+    /// The answer to a page action, before any result.
+    enum Answer: String {
+        case accepted
+        case notAvailable = "not_available"
+        case badArgs = "bad_args"
+    }
+
+    private(set) var isOpen = false
+    private(set) var inFlight = false
+    /// A cancel (or reset) that came while an attempt was running: applied when it returns.
+    private var cancelPending = false
+
+    var engine: CashTreesRecoveryEngine
+    /// Where `restore` runs. Tests run it inline.
+    var work: (@escaping () -> Void) -> Void = { job in DispatchQueue.global(qos: .userInitiated).async(execute: job) }
+    /// How the result comes back to the main queue. Tests run it inline.
+    var main: (@escaping () -> Void) -> Void = { job in DispatchQueue.main.async(execute: job) }
+
+    init(engine: CashTreesRecoveryEngine = CashTreesSdkRecoveryEngine()) {
+        self.engine = engine
+    }
+
+    /// `onRecoveryRequired`: opens the session. Nothing is presented. Always true (the SDK refuses a second open itself).
+    func open() -> Bool {
+        isOpen = true
+        cancelPending = false
+        BeamioQALog.write("native recovery session opened")
+        return true
+    }
+
+    /// `nativeRecoverySubmit`. `args` is the page body; only `path` and its fields are read.
+    func submit(_ args: [String: Any]) -> Answer {
+        guard isOpen, !inFlight, !cancelPending else { return .notAvailable }
+        guard let request = Self.request(from: args) else { return .badArgs }
+        inFlight = true
+        BeamioQALog.write("native recovery submit")
+        let engine = self.engine
+        work { [weak self] in
+            let result = engine.restore(request)
+            self?.main { self?.complete(result) }
+        }
+        return .accepted
+    }
+
+    /// `nativeRecoveryCancel`: ends the open session with `cancelled`. While an attempt runs, the cancel waits for it.
+    func cancel() -> Answer {
+        guard isOpen else { return .notAvailable }
+        if inFlight {
+            cancelPending = true
+            return .accepted
+        }
+        close(with: .cancelled)
+        return .accepted
+    }
+
+    /// How long the app may stay in the background with an open session. Longer: the session ends with `cancelled` on return.
+    static let backgroundTimeout: TimeInterval = 300  // the same on both platforms: room to fetch the code from a password manager
+    private var backgroundedAt: Date?
+
+    func noteDidEnterBackground(now: Date = Date()) {
+        backgroundedAt = now
+    }
+
+    func noteWillEnterForeground(now: Date = Date()) {
+        defer { backgroundedAt = nil }
+        guard let since = backgroundedAt, now.timeIntervalSince(since) >= Self.backgroundTimeout else { return }
+        reset()
+    }
+
+    /// A page reload, a navigation away, a content-process exit or a background timeout: the page that opened the session is gone.
+    func reset() {
+        guard isOpen else { return }
+        if inFlight { cancelPending = true } else { close(with: .cancelled) }
+    }
+
+    private func complete(_ result: (code: CashTreesRecoveryCode, eoa: String?, cooldownSec: Int?)) {
+        inFlight = false
+        BeamioQALog.write("native recovery result \(result.code.rawValue)")  // the code only, never the input
+        if result.code == .ok {
+            // the key is written: the page must learn it, whatever a pending cancel says
+            cancelPending = false
+            isOpen = false
+            engine.finish(.ok, eoa: result.eoa, cooldownSec: nil)
+            return
+        }
+        if cancelPending {
+            close(with: .cancelled)
+            return
+        }
+        // a failure keeps the session open for a retry (§25.42.8)
+        engine.finish(result.code, eoa: nil, cooldownSec: result.cooldownSec)
+    }
+
+    private func close(with code: CashTreesRecoveryCode) {
+        cancelPending = false
+        isOpen = false
+        engine.finish(code, eoa: nil, cooldownSec: nil)
+    }
+
+    /// The page args → an engine request, or nil (`bad_args`). Both platforms check the shape and the UTF-8 length only:
+    /// the formats (the recovery code, the BeamioTag) are judged by the engine, which answers `invalid_format`; nothing is
+    /// normalised here.
+    static let maxCodeBytes = 64
+    static let maxNameBytes = 128
+    static let maxPasswordBytes = 256
+
+    static func request(from args: [String: Any]) -> CashTreesRecoveryRequest? {
+        guard let path = args["path"] as? String else { return nil }
+        let allowed: Set<String>
+        switch path {
+        case "code": allowed = ["action", "path", "code"]
+        case "account": allowed = ["action", "path", "name", "password"]
+        default: return nil
+        }
+        guard Set(args.keys).isSubset(of: allowed) else { return nil }
+        if path == "code" {
+            guard let code = args["code"] as? String, code.utf8.count <= maxCodeBytes else { return nil }
+            return .code(secret: Array(code.utf8))
+        }
+        guard let name = args["name"] as? String, name.utf8.count <= maxNameBytes,
+              let password = args["password"] as? String, password.utf8.count <= maxPasswordBytes
+        else { return nil }
+        return .account(name: name, password: Array(password.utf8))
+    }
+}
+
+/// Installs the headless host for the SDK (`onRecoveryRequired`).
 enum CashTreesNativeRecoveryRoute {
-    static let recoveredNotification = Notification.Name("CashTreesNativeRecovered")
     private static let lock = NSLock()
     private static var installed = false
+    private static var observers: [NSObjectProtocol] = []
 
     static func installOnce() {
         lock.lock()
         defer { lock.unlock() }
         guard !installed else { return }
         installed = true
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            CashTreesRecoverySession.shared.noteDidEnterBackground()
+        })
+        observers.append(nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
+            CashTreesRecoverySession.shared.noteWillEnterForeground()
+        })
         BeamioNativeRecovery.onRecoveryRequired = { _ in
-            if Thread.isMainThread { return present() }
-            return DispatchQueue.main.sync { present() }
+            if Thread.isMainThread { return CashTreesRecoverySession.shared.open() }
+            return DispatchQueue.main.sync { CashTreesRecoverySession.shared.open() }
         }
-    }
-
-    /// True when the page is (or already was) on screen.
-    @discardableResult
-    static func present(engine: CashTreesRecoveryEngine = CashTreesSdkRecoveryEngine()) -> Bool {
-        guard Thread.isMainThread else { return DispatchQueue.main.sync { present(engine: engine) } }
-        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }
-        var top = (windows.first(where: { $0.isKeyWindow }) ?? windows.first)?.rootViewController
-        while let p = top?.presentedViewController { top = p }
-        guard let host = top else { return false }
-        if host is CashTreesNativeRecoveryViewController { return true }
-        BeamioQALog.write("native recovery page presented")
-        let vc = CashTreesNativeRecoveryViewController(copy: .forLanguages(Locale.preferredLanguages), engine: engine)
-        vc.modalPresentationStyle = .fullScreen
-        vc.onFinished = { code in
-            if code == .ok { NotificationCenter.default.post(name: recoveredNotification, object: nil) }
-        }
-        host.present(vc, animated: true)
-        return true
     }
 }
 
-/// Input checks done on the page before anything reaches the engine (§25.42.4).
+/// The page actions of the headless recovery (`nativeRecoverySubmit`, `nativeRecoveryCancel`) and their answers.
+enum CashTreesRecoveryBridge {
+    static let submitAction = "nativeRecoverySubmit"
+    static let cancelAction = "nativeRecoveryCancel"
+    /// Declared to the page in `window.__CT_IOS_CAPS__`.
+    static let capability = "recovery.page-input.v1"
+
+    static func handles(_ action: String) -> Bool { action == submitAction || action == cancelAction }
+
+    /// Each check on its own (the capability is a hint for the page, never trust): the main frame, the fixed local origin
+    /// (`cashtrees-local://localhost`, no port), and the shell's bundle trust (NativeBridgeTrust) for this message.
+    static func isTrustedSource(isMainFrame: Bool, scheme: String, host: String, port: Int, bundleTrusted: Bool) -> Bool {
+        isMainFrame
+            && scheme.lowercased() == CashTreesPWAScheme.scheme
+            && host.lowercased() == CashTreesPWAScheme.host
+            && port == 0
+            && bundleTrusted
+    }
+
+    /// `trusted`: the shell's bundle trust for this message AND the main frame. An untrusted source reaches no engine.
+    /// The answer carries the action and the outcome only; it never echoes an arg.
+    static func answer(action: String, body: [String: Any], trusted: Bool, session: CashTreesRecoverySession) -> [String: Any] {
+        guard trusted else { return ["action": action, "ok": false, "error": "origin_refused"] }
+        let outcome = action == submitAction ? session.submit(body) : session.cancel()
+        if outcome == .accepted { return ["action": action, "ok": true] }
+        return ["action": action, "ok": false, "error": outcome.rawValue]
+    }
+}
+
+/// Input checks kept from the removed native page. The engine does its own checks; these stay for reuse and their tests.
 enum CashTreesNativeRecoveryInput {
     /// ASCII whitespace trimmed from both ends of the recovery code.
     private static let asciiSpace = CharacterSet(charactersIn: " \t\n\r\u{0B}\u{0C}")
@@ -141,294 +289,10 @@ enum CashTreesNativeRecoveryInput {
         return name
     }
 
-    /// Path B: the BeamioTag (see `beamioTagName`) and the password as typed. Nil means no query is made.
-    static func account(name: String, password: String) -> (name: String, password: String)? {
-        guard let tag = beamioTagName(name), !password.isEmpty else { return nil }
-        return (tag, password)
-    }
-
     static func wipe(_ request: CashTreesRecoveryRequest) {
         switch request {
         case .code(var s): for i in s.indices { s[i] = 0 }
         case .account(_, var p): for i in p.indices { p[i] = 0 }
         }
-    }
-}
-
-/// Page copy, English and Chinese by system language (same rule as the import page).
-struct CashTreesNativeRecoveryCopy: Equatable {
-    let title, choose, pathCode, pathAccount, codePlaceholder, namePlaceholder, passwordPlaceholder: String
-    let submit, back, cancel, working, pasted: String
-    let messages: [String: String]
-
-    static let en = CashTreesNativeRecoveryCopy(
-        title: "Restore wallet", choose: "How do you want to restore?",
-        pathCode: "Recovery code", pathAccount: "Account name and password",
-        codePlaceholder: "Recovery code (22 characters)", namePlaceholder: "Account name", passwordPlaceholder: "Password",
-        submit: "Restore", back: "Back", cancel: "Cancel", working: "Restoring…", pasted: "Pasted",
-        messages: [
-            "ok": "Restored", "invalid_format": "Check the input and try again.", "tag_format": "Use 3–26 letters, numbers, dots, or underscores", "bad_pin": "The password is not correct.",
-            "backoff": "Too many attempts. Try again in %d seconds.", "not_found": "No record was found.",
-            "network_error": "Could not connect. Try again later.",
-            "already_exists": "This device already has a wallet key. Nothing was changed.",
-            "record_invalid": "The record could not be read.", "write_failed": "Could not save. Try again.",
-            "readback_failed": "Could not save. Try again.",
-            "legacy_record": "This account uses an older record that this version cannot restore yet.",
-            "not_supported": "Restore is not available on this device.",
-        ])
-
-    static let zh = CashTreesNativeRecoveryCopy(
-        title: "恢复钱包", choose: "选择恢复方式",
-        pathCode: "恢复码", pathAccount: "账号名与密码",
-        codePlaceholder: "恢复码（22 位）", namePlaceholder: "账号名", passwordPlaceholder: "密码",
-        submit: "恢复", back: "返回", cancel: "取消", working: "正在恢复…", pasted: "已粘贴",
-        messages: [
-            "ok": "已恢复", "invalid_format": "请检查输入后重试。", "tag_format": "请使用 3–26 个字母、数字、点或下划线", "bad_pin": "密码不正确。",
-            "backoff": "尝试次数过多，请 %d 秒后再试。", "not_found": "未找到记录。",
-            "network_error": "无法连接，请稍后重试。", "already_exists": "本设备已有钱包密钥，未做任何改动。",
-            "record_invalid": "记录无法读取。", "write_failed": "保存失败，请重试。", "readback_failed": "保存失败，请重试。",
-            "legacy_record": "该账号使用旧版记录，本版本暂不支持恢复。",
-            "not_supported": "本设备暂不支持恢复。",
-        ])
-
-    static func forLanguages(_ preferred: [String]) -> CashTreesNativeRecoveryCopy {
-        (preferred.first ?? "").lowercased().hasPrefix("zh") ? zh : en
-    }
-
-    /// The text for a code; `cancelled` has none.
-    func message(for code: CashTreesRecoveryCode, cooldownSec: Int? = nil) -> String? {
-        guard code != .cancelled, let m = messages[code.rawValue] else { return nil }
-        return code == .backoff ? String(format: m, cooldownSec ?? 0) : m
-    }
-}
-
-/// The page. First screen: choose the path. Then one form. Failures keep the page open; `ok` closes it.
-final class CashTreesNativeRecoveryViewController: UIViewController {
-    private let copy: CashTreesNativeRecoveryCopy
-    private let engine: CashTreesRecoveryEngine
-    private(set) var hadResult = false
-    var onFinished: ((CashTreesRecoveryCode?) -> Void)?
-
-    private let codeField = CashTreesSecureKeyField()
-    private let nameField = UITextField()
-    private let passwordField = CashTreesSecureKeyField()
-    private let statusLabel = UILabel()
-    private let submitButton = UIButton(type: .system)
-    private let chooser = UIStackView()
-    private let form = UIStackView()
-    private var path: Character = "A"
-    private var busy = false
-    private var shield: UIView?
-
-    init(copy: CashTreesNativeRecoveryCopy, engine: CashTreesRecoveryEngine) {
-        self.copy = copy
-        self.engine = engine
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = UIColor(red: 7 / 255, green: 17 / 255, blue: 38 / 255, alpha: 1)
-        let title = label(copy.title, size: 20, weight: .semibold)
-        title.accessibilityTraits = .header
-
-        chooser.axis = .vertical
-        chooser.spacing = 12
-        chooser.addArrangedSubview(label(copy.choose, size: 14, weight: .regular))
-        chooser.addArrangedSubview(button(copy.pathCode, id: "nativeRecovery.pathCode") { [weak self] in self?.show(path: "A") })
-        chooser.addArrangedSubview(button(copy.pathAccount, id: "nativeRecovery.pathAccount") { [weak self] in self?.show(path: "B") })
-
-        for f in [codeField, passwordField] {
-            f.pastedAnnouncement = copy.pasted
-            f.keyboardType = .asciiCapable
-            styleField(f)
-        }
-        codeField.placeholder = copy.codePlaceholder
-        codeField.accessibilityLabel = copy.codePlaceholder
-        codeField.accessibilityIdentifier = "nativeRecovery.code"
-        passwordField.placeholder = copy.passwordPlaceholder
-        passwordField.accessibilityLabel = copy.passwordPlaceholder
-        passwordField.accessibilityIdentifier = "nativeRecovery.password"
-        nameField.placeholder = copy.namePlaceholder
-        nameField.autocorrectionType = .no
-        nameField.autocapitalizationType = .none
-        nameField.spellCheckingType = .no
-        nameField.smartQuotesType = .no
-        nameField.smartDashesType = .no
-        nameField.textContentType = nil
-        nameField.accessibilityIdentifier = "nativeRecovery.name"
-        styleField(nameField)
-
-        statusLabel.font = .systemFont(ofSize: 14)
-        statusLabel.textColor = UIColor(red: 253 / 255, green: 230 / 255, blue: 138 / 255, alpha: 1)
-        statusLabel.numberOfLines = 0
-        statusLabel.textAlignment = .center
-        statusLabel.isHidden = true
-        statusLabel.accessibilityIdentifier = "nativeRecovery.status"
-
-        var pill = UIButton.Configuration.filled()
-        pill.baseBackgroundColor = .white
-        pill.baseForegroundColor = view.backgroundColor
-        pill.cornerStyle = .capsule
-        pill.title = copy.submit
-        submitButton.configuration = pill
-        submitButton.accessibilityIdentifier = "nativeRecovery.submit"
-        submitButton.addTarget(self, action: #selector(submit), for: .touchUpInside)
-
-        form.axis = .vertical
-        form.spacing = 12
-        form.isHidden = true
-        [codeField, nameField, passwordField, statusLabel, submitButton].forEach { form.addArrangedSubview($0) }
-        form.addArrangedSubview(button(copy.back, id: "nativeRecovery.back") { [weak self] in self?.showChooser() })
-
-        let cancel = button(copy.cancel, id: "nativeRecovery.cancel") { [weak self] in self?.close(nil) }
-        let stack = UIStackView(arrangedSubviews: [title, chooser, form, cancel])
-        stack.axis = .vertical
-        stack.spacing = 20
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
-            stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor, constant: -16),
-            codeField.heightAnchor.constraint(equalToConstant: 44),
-            nameField.heightAnchor.constraint(equalToConstant: 44),
-            passwordField.heightAnchor.constraint(equalToConstant: 44),
-        ])
-
-        // §25.42.4 item 9: cover the page while the app is in the background (app switcher snapshot).
-        let nc = NotificationCenter.default
-        nc.addObserver(self, selector: #selector(coverContent), name: UIApplication.willResignActiveNotification, object: nil)
-        nc.addObserver(self, selector: #selector(uncoverContent), name: UIApplication.didBecomeActiveNotification, object: nil)
-    }
-
-    // MARK: - Paths
-
-    func show(path p: Character) {
-        path = p
-        chooser.isHidden = true
-        form.isHidden = false
-        codeField.isHidden = p != "A"
-        nameField.isHidden = p != "B"
-        passwordField.isHidden = p != "B"
-        statusLabel.isHidden = true
-        (p == "A" ? codeField : nameField).becomeFirstResponder()
-    }
-
-    private func showChooser() {
-        clearInputs()
-        form.isHidden = true
-        chooser.isHidden = false
-    }
-
-    // MARK: - Submit
-
-    @objc func submit() {
-        guard !busy else { return }  // §25.42.4 item 5: no double submit
-        let request: CashTreesRecoveryRequest
-        if path == "A" {
-            let raw = codeField.text ?? ""
-            codeField.text = ""
-            guard let code = CashTreesNativeRecoveryInput.normalizedCode(raw) else { return show(.invalidFormat, nil) }
-            request = .code(secret: Array(code.utf8))
-        } else {
-            let pw = passwordField.text ?? ""
-            passwordField.text = ""
-            guard let tag = CashTreesNativeRecoveryInput.beamioTagName(nameField.text ?? "") else {
-                return showFormatMessage(copy.messages["tag_format"] ?? "")  // the PWA message; no query is made
-            }
-            guard let acc = CashTreesNativeRecoveryInput.account(name: tag, password: pw) else {
-                return show(.invalidFormat, nil)
-            }
-            request = .account(name: acc.name, password: Array(acc.password.utf8))
-        }
-        busy = true
-        submitButton.isEnabled = false
-        statusLabel.text = copy.working
-        statusLabel.isHidden = false
-        engine.submit(request) { [weak self] code, cooldown in self?.show(code, cooldown) }
-    }
-
-    /// Shows a format message on the page (no SDK call, the form stays usable).
-    private func showFormatMessage(_ text: String) {
-        busy = false
-        submitButton.isEnabled = true
-        statusLabel.text = text
-        statusLabel.isHidden = text.isEmpty
-    }
-
-    private func show(_ code: CashTreesRecoveryCode, _ cooldown: Int?) {
-        hadResult = true
-        busy = false
-        submitButton.isEnabled = true
-        let message = copy.message(for: code, cooldownSec: cooldown) ?? ""
-        statusLabel.text = message
-        statusLabel.isHidden = message.isEmpty
-        BeamioQALog.write("native recovery result \(code.rawValue)")  // code only, never the input
-        UIAccessibility.post(notification: .announcement, argument: message)
-        if code == .ok {
-            submitButton.isEnabled = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.close(.ok) }
-        }
-    }
-
-    private func close(_ code: CashTreesRecoveryCode?) {
-        clearInputs()
-        engine.pageClosed(hadResult: hadResult)
-        dismiss(animated: true) { [weak self] in self?.onFinished?(code) }
-    }
-
-    private func clearInputs() {
-        codeField.text = ""
-        passwordField.text = ""
-        nameField.text = ""
-    }
-
-    // MARK: - Background shield
-
-    @objc private func coverContent() {
-        guard shield == nil else { return }
-        let v = UIView(frame: view.bounds)
-        v.backgroundColor = view.backgroundColor
-        v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        v.accessibilityIdentifier = "nativeRecovery.shield"
-        view.addSubview(v)
-        shield = v
-    }
-
-    @objc private func uncoverContent() {
-        shield?.removeFromSuperview()
-        shield = nil
-    }
-
-    var isShielded: Bool { shield != nil }
-
-    // MARK: - Small helpers
-
-    private func label(_ text: String, size: CGFloat, weight: UIFont.Weight) -> UILabel {
-        let l = UILabel()
-        l.text = text
-        l.font = .systemFont(ofSize: size, weight: weight)
-        l.textColor = .white
-        l.textAlignment = .center
-        l.numberOfLines = 0
-        return l
-    }
-
-    private func button(_ title: String, id: String, action: @escaping () -> Void) -> UIButton {
-        let b = UIButton(type: .system, primaryAction: UIAction { _ in action() })
-        b.setTitle(title, for: .normal)
-        b.setTitleColor(.white, for: .normal)
-        b.accessibilityIdentifier = id
-        return b
-    }
-
-    private func styleField(_ f: UITextField) {
-        f.borderStyle = .roundedRect
-        f.backgroundColor = .white
-        f.textColor = UIColor(red: 7 / 255, green: 17 / 255, blue: 38 / 255, alpha: 1)
     }
 }

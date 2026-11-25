@@ -1,0 +1,806 @@
+{
+  "comment": "TEST ONLY. Manifest v2 golden vectors. Keys are TEST keys; private keys are not included. Do not trust these keys in any release build.",
+  "spec": "OTA-MANIFEST-V2-SPEC.md",
+  "signDomain": "beamio-pwa-ota/v2\n",
+  "issuedAt": 1795000000,
+  "trustedKeys": [
+    {
+      "keyId": "250cf19731885996",
+      "publicKey": "JytrEcHLssD2XnVRwuHCmC77qzVUd3xwfDPJNTvZbtk=",
+      "label": "TEST test-250cf19731885996"
+    }
+  ],
+  "untrustedKeys": [
+    {
+      "keyId": "633f7e7faa3978cd",
+      "publicKey": "x92U93Q9b7EaY78V3yMSmWoAyt9yFP6k4Y6GSEnyAPI=",
+      "label": "TEST test-633f7e7faa3978cd (not trusted)"
+    }
+  ],
+  "golden": {
+    "file": "SilentPassUI-0.53.48.zip",
+    "sha256": "c4805a90ae4bbec1ea5f6f3db5cf1674023819fe77fed165287fe54b094f2f19",
+    "size": 11082177,
+    "contentAlg": "beamio-tree-v1",
+    "contentDigest": "13080eef9cec6068692696a8bd70ff10d19c1cfd9aa815f7c421f24748604974",
+    "entries": 104,
+    "payloadBase64": "eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==",
+    "payloadUtf8": "{\"type\":\"beamio-pwa-ota\",\"v\":2,\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"sha256\":\"c4805a90ae4bbec1ea5f6f3db5cf1674023819fe77fed165287fe54b094f2f19\",\"size\":11082177,\"contentAlg\":\"beamio-tree-v1\",\"contentDigest\":\"13080eef9cec6068692696a8bd70ff10d19c1cfd9aa815f7c421f24748604974\",\"minShell\":{\"ios\":114,\"android\":191},\"issuedAt\":1795000000}",
+    "payloadSha256": "a178de9ede509f61dd9d0cec9c2086bb5e23a4b275e63db21fea081aaa81c004",
+    "signedMessageSha256": "49d659fc3880f576aa86bf96097a60ac200abeede494da4575c21042e2a421de",
+    "signature": {
+      "keyId": "250cf19731885996",
+      "sig": "pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw=="
+    },
+    "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}"
+  },
+  "cases": [
+    {
+      "name": "golden-ok",
+      "description": "frozen SilentPassUI-0.53.48.zip signed by TEST-primary",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": "golden:SilentPassUI-0.53.48.zip",
+      "zipSha256": "c4805a90ae4bbec1ea5f6f3db5cf1674023819fe77fed165287fe54b094f2f19",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "ok"
+      }
+    },
+    {
+      "name": "golden-ok-android",
+      "description": "same manifest, android shell 191",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": "golden:SilentPassUI-0.53.48.zip",
+      "zipSha256": "c4805a90ae4bbec1ea5f6f3db5cf1674023819fe77fed165287fe54b094f2f19",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "android",
+        "shellBuild": 191,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "ok"
+      }
+    },
+    {
+      "name": "golden-ok-two-signatures",
+      "description": "TEST-other then TEST-primary; one trusted signature is enough",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"633f7e7faa3978cd\",\"sig\":\"iFxUZl/v4ria5VN97Jl58ghx2yeXHzAi+Se1lG/O41FozTvW62swduJwDLyiUrvZHBVnrxYu6o9kZS0YXbDRDQ==\"},{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": "golden:SilentPassUI-0.53.48.zip",
+      "zipSha256": "c4805a90ae4bbec1ea5f6f3db5cf1674023819fe77fed165287fe54b094f2f19",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "ok"
+      }
+    },
+    {
+      "name": "missing-signed",
+      "description": "no signed object (old-format update.json)",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\"}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "missing_signature",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "empty-signatures",
+      "description": "signed.signatures is empty",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "missing_signature",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "bad-base64",
+      "description": "payload is not strict base64",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"yJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "keyid-not-hex",
+      "description": "keyId with a test- prefix is not a 16-hex keyId",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"test-250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "wrong-key",
+      "description": "signed by TEST-other only (not in the trusted table)",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"633f7e7faa3978cd\",\"sig\":\"iFxUZl/v4ria5VN97Jl58ghx2yeXHzAi+Se1lG/O41FozTvW62swduJwDLyiUrvZHBVnrxYu6o9kZS0YXbDRDQ==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "untrusted_key",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "tampered-payload",
+      "description": "payload bytes changed after signing (size + 1)",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzgsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "bad_signature",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "v1-payload-v1-domain",
+      "description": "v1 payload signed with the v1 domain",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoxLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"8ojMWZTaZa1httIR5U+HGczbxODGyKXFB135mbec2TG/8TTgHViAjOkEeS0k8d2I3pNJRb6AaCSbDhOneNIQAg==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "bad_signature",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "v1-payload-v2-domain",
+      "description": "v1 payload signed with the v2 domain",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoxLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"Ec4AYaPcE0AT4YBeSaqOyQUBzHcgieZnJtXAh+ibelJJCyl9dm+iyv+MEQ62dNN7b7Rfb1CZLRtEgJS2wwyaAQ==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "payload-extra-field",
+      "description": "signed v2 payload with an extra field",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sInppcF9zaGEyNTYiOiJ4IiwiaXNzdWVkQXQiOjE3OTUwMDAwMDB9\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"H3INY4L2m6caLQTcYG8D+lTFIJhluL3CO1hTKsVGLDry3ggG/LmkrMZaEg1gFVOtmD6I1R+WKS9BiI1wSwOaDA==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "revoked",
+      "description": "payload sha256 listed in REVOKED_PAYLOADS",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": [
+          "a178de9ede509f61dd9d0cec9c2086bb5e23a4b275e63db21fea081aaa81c004"
+        ]
+      },
+      "expect": {
+        "manifestVerdict": "revoked",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "outer-mismatch",
+      "description": "outer ver differs from the payload",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "mismatch",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "downgrade-equal",
+      "description": "reference (verified) version equals payload.ver",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.48",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "downgrade",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "shell-too-old-ios",
+      "description": "iOS build 113 < minShell.ios 114",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 113,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "shell_too_old",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "shell-too-old-android",
+      "description": "Android versionCode 190 < minShell.android 191",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "android",
+        "shellBuild": 190,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "shell_too_old",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "tampered-zip",
+      "description": "one byte flipped in the middle of the frozen zip",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": "zips/tampered-zip.zip",
+      "zipSha256": "1e03d0dd22731c4d3902758cb2fac307edf8391c3635eaf6f426b2486a351d16",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "hash_mismatch"
+      }
+    },
+    {
+      "name": "truncated-zip",
+      "description": "frozen zip minus its last byte",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"pH7uTLXtjCcIW5haJVKgbq8V+sbht6OMdlhSrt53weR9YKo7x8IjdD+/+MlVR85p5QaMKPaHd4djvc6Ar/9MBw==\"}]}}",
+      "zip": "zips/truncated-zip.zip",
+      "zipSha256": "137d293af20d9d0f29b3f6ca9076e7afb318d069f8ff3f8b2bc20dd10b003150",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "size_mismatch"
+      }
+    },
+    {
+      "name": "noncanonical-macosx",
+      "description": "small bundle with __MACOSX entry",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJhOGQxMTdlZjI0M2JiZjg1MDIwZmQ4ZWEyMjU0ZDJmYTM0NjYyN2U2MzdjMDkyYzczZDFlMDA3MDRmMmNiNzMyIiwic2l6ZSI6NjMxLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"kmNsrlkAX9BsMvanYOtwsxOad5LG0YvwagFYd5SDblkt422Kwa3U1dcWzpYEGnGeyS3ApFTvXodE/V7nQTY4CA==\"}]}}",
+      "zip": "zips/noncanonical-macosx.zip",
+      "zipSha256": "a8d117ef243bbf85020fd8ea2254d2fa346627e637c092c73d1e00704f2cb732",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-symlink",
+      "description": "small bundle with symlink entry",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiIyMzI1YzkwZWMxMDExMGRhZDQxNjAwYzkyZjc1NzNiOWFmMGI5ZTZiYzEyZjUzZGRjNmM5OTE5YmJjYWFjMmU3Iiwic2l6ZSI6NjIzLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"USHP8OU6TAWvwBQP83DSO+cScdFWtfRuF/EVfIvzCVhnZgdYOO0TPRGq2SJMQ8iVmK/EpXw+SwmPzHPx8AxGCA==\"}]}}",
+      "zip": "zips/noncanonical-symlink.zip",
+      "zipSha256": "2325c90ec10110dad41600c92f7573b9af0b9e6bc12f53ddc6c9919bbcaac2e7",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-directory",
+      "description": "small bundle with directory entry",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJhM2YyZjE0ZjQ5NzVkNTBhZmJiYTgzZTE3MGYyZDNkZWE0M2ZlYjQxMjczMDBjMWNlODEzNGQ1M2Y5YWFiM2I1Iiwic2l6ZSI6NjAyLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"BfD4FJS/nmtVmgvuc0Jzi0gsytoxOXSuMP6+j237BsHRgwMktXnQ+6PZ/zYIDMMadr4RY5V8VJV0Oakm79m+Dg==\"}]}}",
+      "zip": "zips/noncanonical-directory.zip",
+      "zipSha256": "a3f2f14f4975d50afbba83e170f2d3dea43feb4127300c1ce8134d53f9aab3b5",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-duplicate",
+      "description": "small bundle with duplicate name",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiIyNDJmMzNkMDllODY3NjY5NDBlNTdlMzBlZTBkOTNjZWFlZGVlMDIxMTI3OTc3ZjJkZDQ1NTBhZTY4NmJjNDEzIiwic2l6ZSI6NjE5LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"riQrsIUGnwZJFHenHjYwn39MB+tpMpHVBN/EHDJ3r5rpcEnuHGDZiSf1xFYUTBymsFdLmhohYetkmsIu//lvBA==\"}]}}",
+      "zip": "zips/noncanonical-duplicate.zip",
+      "zipSha256": "242f33d09e86766940e57e30ee0d93ceaedee021127977f2dd4550ae686bc413",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-dotdot",
+      "description": "small bundle with .. segment",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiIzNDkyZmM5ZGFiNmJjMDg3MzZiYjdjOWQ2ZGNmMzQ2NGZlYWJmZjU0OWUzNmQ4Y2JiMDdmM2RkNjYzMTA0NTZiIiwic2l6ZSI6NjE3LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"Nu+qINv5fSOltaECCQv3+F16ItuipKyQ5nLE/+pIczUT+OEPJu9kBzShaoXmMO3iNBuFN1kqMeQbnhkdqH63Dw==\"}]}}",
+      "zip": "zips/noncanonical-dotdot.zip",
+      "zipSha256": "3492fc9dab6bc08736bb7c9d6dcf3464feabff549e36d8cbb07f3dd66310456b",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-marker",
+      "description": "small bundle with shell marker file",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiIyZTFhMjA2ODYzMmVlOWFiMWJlYjQ3ZGQ1MzE1OTEyN2QwNjZkN2FlOGQ1ZjM5ODgyM2RiZjU3OWExYmU3ZjRlIiwic2l6ZSI6NjE0LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"78+3oanzrgLm8/7ROd+9lFlDLazNSLU+LwxSJttW7JfXtRoykSxS0lwZ4n5PAVcQN1zuV2IeSRezVvQ4S0jfDg==\"}]}}",
+      "zip": "zips/noncanonical-marker.zip",
+      "zipSha256": "2e1a2068632ee9ab1beb47dd53159127d066d7ae8d5f398823dbf579a1be7f4e",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-no-index",
+      "description": "bundle without index.html",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJkMGI2MGU2MmM3NDI1MjdmYjliYzMyN2FjZDczMDQxMjJiYmY5OTVmMjI1NzRhYzJkMTE3MDMxOGI4OGRiYzY1Iiwic2l6ZSI6MTY5LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"ODULdh7p7FTldQxTrjTXQeyFzkwXyMMDvDVN8m+mx+snzUBbrWDxiDtVjxbu81JyJKO//Y5odmxnzdRu88wjBA==\"}]}}",
+      "zip": "zips/noncanonical-no-index.zip",
+      "zipSha256": "d0b60e62c742527fb9bc327acd7304122bbf995f22574ac2d1170318b88dbc65",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "content-inner-ver",
+      "description": "zip update.json says 0.53.47, payload says 0.53.49",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiI1YjRjMDY2OWViNTM0NDMwYmQwYTk2NzBkNzQwMjNmOWVkN2UxNWZlOTJhNGE1MzA0NTJkNGI0OTQ0NmQwNDM0Iiwic2l6ZSI6NTEwLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiY2ViZmMyNjE5MWNiY2U4YWFkNDllNjFjYmQ2M2MyMWVmODBiNDVhZTAwMGEyYTEyYzczOTI5MDNiMzAwODQ4NiIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"xYXmW4vUpwBmg6oRKORLTuE4bYfuqPRY4rlYE3UYOyLILK4PNHj48FbsOdABovWUF6V0fmVPt68+YfH3X/CWCA==\"}]}}",
+      "zip": "zips/content-inner-ver.zip",
+      "zipSha256": "5b4c0669eb534430bd0a9670d74023f9ed7e15fe92a4a530452d4b49446d0434",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "content_mismatch"
+      }
+    },
+    {
+      "name": "content-digest",
+      "description": "frozen zip, payload contentDigest of another tree",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiJkMDkyZTQyNzhlM2NjNDU0ZTlmYzUyNjdlZWZjNzM4MDhhODE1OTU0OGNkYmYyOTI4Mjk1YTBjZjExYTk2Zjg3IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"R3Mcl2EBw9Mz7GEb0taeCH9mkjKU2k6F6SUFihvVdsf6oqi/B5C7+ppjjswUqzsZVLQbnVuedtpuLFegdId4Bg==\"}]}}",
+      "zip": "golden:SilentPassUI-0.53.48.zip",
+      "zipSha256": "c4805a90ae4bbec1ea5f6f3db5cf1674023819fe77fed165287fe54b094f2f19",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "content_mismatch"
+      }
+    },
+    {
+      "name": "payload-duplicate-key",
+      "description": "validly signed, not canonical: duplicate \"v\" key",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"Uix9J7KEuNjXPVSmjrbJfkuoAmRR1xCWUruD8c28bi212U9srs7ZiRt6gLugmof6N5BGLD3jrMOho6hVrI5oCg==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "payload-float-v",
+      "description": "validly signed, not canonical: \"v\":2.0",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLjAsInZlciI6IjAuNTMuNDgiLCJmaWxlbmFtZSI6IlNpbGVudFBhc3NVSS0wLjUzLjQ4LnppcCIsInNoYTI1NiI6ImM0ODA1YTkwYWU0YmJlYzFlYTVmNmYzZGI1Y2YxNjc0MDIzODE5ZmU3N2ZlZDE2NTI4N2ZlNTRiMDk0ZjJmMTkiLCJzaXplIjoxMTA4MjE3NywiY29udGVudEFsZyI6ImJlYW1pby10cmVlLXYxIiwiY29udGVudERpZ2VzdCI6IjEzMDgwZWVmOWNlYzYwNjg2OTI2OTZhOGJkNzBmZjEwZDE5YzFjZmQ5YWE4MTVmN2M0MjFmMjQ3NDg2MDQ5NzQiLCJtaW5TaGVsbCI6eyJpb3MiOjExNCwiYW5kcm9pZCI6MTkxfSwiaXNzdWVkQXQiOjE3OTUwMDAwMDB9\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"5BnYTz6QbQT8b/lnRUOMkua95OTvXv3JG4Zy7YzvWSFr6rdUri/7TJjmGjM2HmYpvackxKCFiMbEvawC/mYIAg==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "payload-exponent-size",
+      "description": "validly signed, not canonical: size written with an exponent",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MS4xMDgyMTc3ZTcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"3iH0v/Hj8TTXJRuO7N0TZG872GZBA+u4WEpD5lETOJ3koOjhzHdnCRwQGkYoJxwUFu0zmLWJQr2Vu0l0XFZ7Aw==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "payload-whitespace",
+      "description": "validly signed, not canonical: extra space",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjogMiwidmVyIjoiMC41My40OCIsImZpbGVuYW1lIjoiU2lsZW50UGFzc1VJLTAuNTMuNDguemlwIiwic2hhMjU2IjoiYzQ4MDVhOTBhZTRiYmVjMWVhNWY2ZjNkYjVjZjE2NzQwMjM4MTlmZTc3ZmVkMTY1Mjg3ZmU1NGIwOTRmMmYxOSIsInNpemUiOjExMDgyMTc3LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiMTMwODBlZWY5Y2VjNjA2ODY5MjY5NmE4YmQ3MGZmMTBkMTljMWNmZDlhYTgxNWY3YzQyMWYyNDc0ODYwNDk3NCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"ZUU9JWb0IR/3p5cSm5byxVdm6qWkAcI3iyGkep9+MqsLNsIUgK6vCl/rf8goLdaKwmWhqf/5K47az55q+gIxDA==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "payload-unicode-escape",
+      "description": "validly signed, not canonical: \\u escape in type",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1cdTAwNmZ0YSIsInYiOjIsInZlciI6IjAuNTMuNDgiLCJmaWxlbmFtZSI6IlNpbGVudFBhc3NVSS0wLjUzLjQ4LnppcCIsInNoYTI1NiI6ImM0ODA1YTkwYWU0YmJlYzFlYTVmNmYzZGI1Y2YxNjc0MDIzODE5ZmU3N2ZlZDE2NTI4N2ZlNTRiMDk0ZjJmMTkiLCJzaXplIjoxMTA4MjE3NywiY29udGVudEFsZyI6ImJlYW1pby10cmVlLXYxIiwiY29udGVudERpZ2VzdCI6IjEzMDgwZWVmOWNlYzYwNjg2OTI2OTZhOGJkNzBmZjEwZDE5YzFjZmQ5YWE4MTVmN2M0MjFmMjQ3NDg2MDQ5NzQiLCJtaW5TaGVsbCI6eyJpb3MiOjExNCwiYW5kcm9pZCI6MTkxfSwiaXNzdWVkQXQiOjE3OTUwMDAwMDB9\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"0NAsRTxE4kOlmogAghzQ/E4DeACCqJKElHBwEmn2LcF6XVFd/yVuAbHTBa8mU9d5clw2ENywzOAZ5EaROtTvDA==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "payload-reordered",
+      "description": "validly signed, not canonical: type and v swapped",
+      "updateJson": "{\"ver\":\"0.53.48\",\"filename\":\"SilentPassUI-0.53.48.zip\",\"signed\":{\"payload\":\"eyJ2IjoyLCJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2ZXIiOiIwLjUzLjQ4IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OC56aXAiLCJzaGEyNTYiOiJjNDgwNWE5MGFlNGJiZWMxZWE1ZjZmM2RiNWNmMTY3NDAyMzgxOWZlNzdmZWQxNjUyODdmZTU0YjA5NGYyZjE5Iiwic2l6ZSI6MTEwODIxNzcsImNvbnRlbnRBbGciOiJiZWFtaW8tdHJlZS12MSIsImNvbnRlbnREaWdlc3QiOiIxMzA4MGVlZjljZWM2MDY4NjkyNjk2YThiZDcwZmYxMGQxOWMxY2ZkOWFhODE1ZjdjNDIxZjI0NzQ4NjA0OTc0IiwibWluU2hlbGwiOnsiaW9zIjoxMTQsImFuZHJvaWQiOjE5MX0sImlzc3VlZEF0IjoxNzk1MDAwMDAwfQ==\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"F8mHKTGC8GVQPQI0iLvdeQ6WYmqRQqvSaqQCAnXX+kajK1gje3yFfzlgaJ7XavFLbGpZfJ660DrLSLvgT8B2AA==\"}]}}",
+      "zip": null,
+      "zipSha256": null,
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "malformed",
+        "bundleVerdict": null
+      }
+    },
+    {
+      "name": "noncanonical-archive-comment",
+      "description": "small bundle with archive comment",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJiNTRmNmZmMDI5YzI4MDFlMTJkMWQ0Yjc1MmNlODFkNDg1MDcwZjg3MmRlMGJmMDlkNmRhZDAzNTIyMjUwNTg0Iiwic2l6ZSI6NTE3LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"RlGdjk4xfs0bqj2odndZhy/ZgZR1A2CUp0F6eEFzBP1nXu2e84FBmjvDjeycWqvifuW3Eio2Ndfd/1gIWaHRAg==\"}]}}",
+      "zip": "zips/noncanonical-archive-comment.zip",
+      "zipSha256": "b54f6ff029c2801e12d1d4b752ce81d485070f872de0bf09d6dad03522250584",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-trailing-bytes",
+      "description": "small bundle with bytes after the end-of-central-directory record",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJkYWFhNGJkYTJlZWZhYjY2ZDAxOWExNDQ3MmNjMjY0M2FiYTkwZDQ5MjM0Mjg1ZWI4MjU1MjJmZGZkMWZhNTdmIiwic2l6ZSI6NTExLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"fbmumVQR03L4/PeZoYm//+oY82Td/4Jn3cfagsTPSNJyrJtTJtkvBtouctWIPm+4j75V/KLpT7buXginaoZeDw==\"}]}}",
+      "zip": "zips/noncanonical-trailing-bytes.zip",
+      "zipSha256": "daaa4bda2eefab66d019a14472cc2643aba90d49234285eb825522fdfd1fa57f",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-gap",
+      "description": "small bundle with gap between entries",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJhMjM3NmU2ZWJhN2E2NjZjYTc4ZmU3ZTJmY2RmY2FkMGNkOGU4Y2YzZjRmYzM2NzYzMjM4YTgzMGNhYmVmMzJlIiwic2l6ZSI6NTI2LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"oV9dsAu6Hs8O7nuR/7BuHFmio3uE2fKP+iesj8Tn52fca9H5mG0/SwU11pvaysZq4N5/cN0OfrT/l3741vIJCg==\"}]}}",
+      "zip": "zips/noncanonical-gap.zip",
+      "zipSha256": "a2376e6eba7a666ca78fe7e2fcdfcad0cd8e8cf3f4fc36763238a830cabef32e",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-reordered",
+      "description": "small bundle with central directory order differs from local headers",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJhNjEyNGYzNTIyNGE2MGVlZDkwODMwZjZiZGI4YWRkMTJlNzg1Y2EzYzEyNmJjMThmODg2NGE0ODk3Y2EyYjhlIiwic2l6ZSI6NTEwLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"LrHjWc14hVHfpOXyxWk4WZ+bZa5Nu22UvKRcCOtcuwTzfAQISuQU8+ytec1ab2VY8KSWENofiAG/t+EtJOt5BA==\"}]}}",
+      "zip": "zips/noncanonical-reordered.zip",
+      "zipSha256": "a6124f35224a60eed90830f6bdb8add12e785ca3c126bc18f8864a4897ca2b8e",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-local-mismatch",
+      "description": "small bundle with local header crc differs from the central directory",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiI2M2RhNjU4MWI5N2UwMjU3MWM5MzExZGI2MDQzYjRmNjI0Y2IzNmI4NDM3NTZjN2FmZmQxZGY4M2JiYTFmNTg5Iiwic2l6ZSI6NTEwLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"+w8x8jZY9zjx6y9Fz9s255LGU9v82Eo66nF6peUnFMs3Fllt7PbK8l4+ZSXfCu2KSF/qgzIj284Ls130+ylNCg==\"}]}}",
+      "zip": "zips/noncanonical-local-mismatch.zip",
+      "zipSha256": "63da6581b97e02571c9311db6043b4f624cb36b843756c7affd1df83bba1f589",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-entry-comment",
+      "description": "small bundle with entry comment",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiI5ZWNkNmZlMzhmNTdkNmU5NDVmMWJiNDYyNGI1NTIzOThkZjQ5ZGYyODFmZGU4MjE2Nzc2ZTA2NmMyMWYwYTIwIiwic2l6ZSI6NTExLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"0fwzF/+ifo8XRGSTvEYPclFaMRCtheovwK2UO1xYCWBHBb/6wSYRW6iqf7YdU8l+MycTATEp7S3Oz1KkasjDBg==\"}]}}",
+      "zip": "zips/noncanonical-entry-comment.zip",
+      "zipSha256": "9ecd6fe38f57d6e945f1bb4624b552398df49df281fde8216776e066c21f0a20",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-case-only",
+      "description": "small bundle with names differing only by letter case",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJkNGNhZjdmNzFiY2QwNjE3NDI4NjIxZjJkODgyZTdjN2YzZjcyMmMxZWI0ODdkNDk5OTM2Njk2YjU1NmFmZTU3Iiwic2l6ZSI6NjA5LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"+H7Vr5U+Sd4Br/G89iYCHFDEphRed3YF8v8D6L4O1c42yBR7Tz3nxEM29yDwXg9xIdNL14X5FQSElwbD3wniBg==\"}]}}",
+      "zip": "zips/noncanonical-case-only.zip",
+      "zipSha256": "d4caf7f71bcd0617428621f2d882e7c7f3f722c1eb487d499936696b556afe57",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-long-name",
+      "description": "small bundle with name longer than 255 bytes",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiI5Zjc3ZTc4NjdkYzNiYTVkYjJhZTVkYzUxM2Y2ZWQ1MTA3NWU5N2I4NmMyZjY5ZjM4MjIyYmMyNWY0OGEzYmU0Iiwic2l6ZSI6MTEwMSwiY29udGVudEFsZyI6ImJlYW1pby10cmVlLXYxIiwiY29udGVudERpZ2VzdCI6ImIyYTUxYjI2YjBlZThjNDU3NWViNDZlOWZjMjg2ZmVmYjVjOGY4MzY2ZTc3ZGRiYWUwMTQ4M2IwODNiNzI2NDgiLCJtaW5TaGVsbCI6eyJpb3MiOjExNCwiYW5kcm9pZCI6MTkxfSwiaXNzdWVkQXQiOjE3OTUwMDAwMDB9\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"aLqfVmIuA1+qRpBsyE6jyHILnaZH4lN2VJfe1CWTiAYUIMuVnPCip6D9Jt++beONVosOlIFnHth8+oRo9evDBA==\"}]}}",
+      "zip": "zips/noncanonical-long-name.zip",
+      "zipSha256": "9f77e7867dc3ba5db2ae5dc513f6ed51075e97b86c2f69f38222bc25f48a3be4",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-too-large",
+      "description": "small bundle with total uncompressed size over 256 MiB",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiJjMDQyOWVhNzJhNWEwNzYyNmU3NDNmZGFkNDNhNmE3OGI1ODBhNmI3NGMyN2QyNTU4OGRiOTQ2MThlOTUzYzg4Iiwic2l6ZSI6MjYxNTIwLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"UnZB97Wx/0B8g0me7YlMIZrXoI6GqMWU+5/UK0SQx3HzlZNAY4cZIirXrZLG4DzMLzcekokg8LXL9U9+wRCWDg==\"}]}}",
+      "zip": "zips/noncanonical-too-large.zip",
+      "zipSha256": "c0429ea72a5a07626e743fdad43a6a78b580a6b74c27d25588db94618e953c88",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "noncanonical-too-many-entries",
+      "description": "small bundle with 10001 entries",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiI1ZGIyOTc2MmQ3N2JjODkyYjA0Y2RhZmEzYTU4NDNhMmFlNWZkNWU1MjUwMmRmY2ZkNzJkYzk4ZTNjNTBmOGM3Iiwic2l6ZSI6OTU4MDk4LCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiYjJhNTFiMjZiMGVlOGM0NTc1ZWI0NmU5ZmMyODZmZWZiNWM4ZjgzNjZlNzdkZGJhZTAxNDgzYjA4M2I3MjY0OCIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"x/geM8kT7RIGJ6lMHLcM/V/XJYXuO927PGv1mKhjr8MqE0MxZMCZJioQewVuZVzQ3mwF4TgPLbkgr71Zt8oJCA==\"}]}}",
+      "zip": "zips/noncanonical-too-many-entries.zip",
+      "zipSha256": "5db29762d77bc892b04cdafa3a5843a2ae5fd5e52502dfcfd72dc98e3c50f8c7",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "noncanonical_zip"
+      }
+    },
+    {
+      "name": "small-ok",
+      "description": "small canonical bundle 0.53.49",
+      "updateJson": "{\"ver\":\"0.53.49\",\"filename\":\"SilentPassUI-0.53.49.zip\",\"signed\":{\"payload\":\"eyJ0eXBlIjoiYmVhbWlvLXB3YS1vdGEiLCJ2IjoyLCJ2ZXIiOiIwLjUzLjQ5IiwiZmlsZW5hbWUiOiJTaWxlbnRQYXNzVUktMC41My40OS56aXAiLCJzaGEyNTYiOiI3ODg2MTI3MmI2NzVhNTQ4MDk3MjIzZTQ4MjJmZjIyYmI2M2U4Mzk3NDA1YTEyMjU3MGRlNTllNjVkMDAyMTcxIiwic2l6ZSI6NTEwLCJjb250ZW50QWxnIjoiYmVhbWlvLXRyZWUtdjEiLCJjb250ZW50RGlnZXN0IjoiNzYwN2JmNTAzNmQzYzM1OTM5MTdhMDlhNDRlZTE0OWJjZTcxZTU3MWI3MjU5ZDM5Mjc3NzJiYzNjZmEzMzliOSIsIm1pblNoZWxsIjp7ImlvcyI6MTE0LCJhbmRyb2lkIjoxOTF9LCJpc3N1ZWRBdCI6MTc5NTAwMDAwMH0=\",\"signatures\":[{\"keyId\":\"250cf19731885996\",\"sig\":\"op1Z+C3UIeuv2G+vIAyaG/nbiSMfSKqE0CVKyrKxuXD9GFGG6AySntmx7RwrDgYWVwcNqgf+T0VB8hTxih7KDg==\"}]}}",
+      "zip": "zips/small-ok.zip",
+      "zipSha256": "78861272b675a548097223e4822ff22bb63e8397405a122570de59e65d002171",
+      "context": {
+        "referenceVersion": "0.53.47",
+        "platform": "ios",
+        "shellBuild": 114,
+        "revokedPayloads": []
+      },
+      "expect": {
+        "manifestVerdict": "ok",
+        "bundleVerdict": "ok"
+      }
+    }
+  ]
+}

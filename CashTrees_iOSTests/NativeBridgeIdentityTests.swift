@@ -93,9 +93,9 @@ struct NativeBridgeIdentityTests {
         // update.json must decode as CashTreesPWAUpdateInfo (ver AND filename), as a real install's does.
         try Data("{\"ver\":\"0.53.42\",\"filename\":\"SilentPassUI-0.53.42.zip\"}".utf8)
             .write(to: store.activeDir.appendingPathComponent("update.json"))
-        try store.bootstrap(bundledZip: zip, embeddedTreeDigest: tree, embeddedZipSha256: "zip")
+        try store.bootstrap(bundledZip: zip, embeddedTreeDigest: tree, embeddedZipSha256: CashTreesPWASameVersionRule.fileSHA256(at: zip))
         let afterActive = NativeBridgeTrust.treeDigestOfActive(store.activeDir)
-        #expect(afterActive == tree, "decision=\(store.lastSameVersionDecision) active=\(afterActive ?? "nil") tree=\(tree)")
+        #expect(afterActive == tree, "decision=\(store.lastColdStart.decision) active=\(afterActive ?? "nil") tree=\(tree)")
     }
 
     @Test func extraFileInActiveIsRefused() throws {
@@ -186,13 +186,14 @@ struct NativeBridgeIdentityTests {
             .write(to: store.activeDir.appendingPathComponent("update.json"))
         try Data("{partial".utf8).write(to: store.activeDir.appendingPathComponent(".source.json.tmp"))
         try Data("{partial".utf8).write(to: root.appendingPathComponent(".active.source.json.tmp"))
-        try store.bootstrap(bundledZip: zip, embeddedTreeDigest: tree, embeddedZipSha256: "zip")
+        try store.bootstrap(bundledZip: zip, embeddedTreeDigest: tree, embeddedZipSha256: CashTreesPWASameVersionRule.fileSHA256(at: zip))
         #expect(!FileManager.default.fileExists(atPath: store.activeDir.appendingPathComponent(".source.json.tmp").path))
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".active.source.json.tmp").path))
         #expect(NativeBridgeTrust.treeDigestOfActive(store.activeDir) == tree)
-        // Order proof: the same-version decision read the cleaned tree and recorded it (no reinstall).
+        // Order proof: the cold start read the cleaned tree and kept it (no reinstall, no unpack).
         // If the gate had read before the cleanup, the residual would have forced a reinstall instead.
-        #expect(store.lastSameVersionDecision.hasPrefix("recordLegacy"), "decision=\(store.lastSameVersionDecision)")
+        #expect(store.lastColdStart.decision == "kept-identical", "decision=\(store.lastColdStart.decision)")
+        #expect(store.lastColdStart.unpackCount == 0)
     }
 
     @Test func recordWriteNeverLeavesATempInsideTheTree() throws {
@@ -205,7 +206,9 @@ struct NativeBridgeIdentityTests {
             .write(to: src.appendingPathComponent("update.json"))
         let zip = src.deletingLastPathComponent().appendingPathComponent("nbt-\(UUID().uuidString).zip")
         try FileManager.default.zipItem(at: src, to: zip, shouldKeepParent: false)
-        try store.bootstrap(bundledZip: zip, embeddedTreeDigest: "x", embeddedZipSha256: "zip")
+        let unzipped = try tempDir(); defer { try? FileManager.default.removeItem(at: unzipped) }
+        try FileManager.default.unzipItem(at: zip, to: unzipped)
+        try store.bootstrap(bundledZip: zip, embeddedTreeDigest: CashTreesPWASameVersionRule.treeDigest(at: unzipped), embeddedZipSha256: CashTreesPWASameVersionRule.fileSHA256(at: zip))
         let inside = try FileManager.default.contentsOfDirectory(atPath: store.activeDir.path)
         #expect(!inside.contains(".source.json.tmp"))
         #expect(FileManager.default.fileExists(atPath: store.activeDir.appendingPathComponent(".source.json").path))

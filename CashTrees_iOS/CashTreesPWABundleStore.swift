@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import Darwin
 import ZIPFoundation
 
 extension Notification.Name {
@@ -16,7 +17,7 @@ extension Notification.Name {
 /// `cashtrees-local://localhost`), **not** under `silentpass_pwa/`. Replacing
 /// `active/` must never clear website data. Device uninstall is what wipes the
 /// wallet — prefer install-over only (the device install rule).
-final class CashTreesPWABundleStore {
+nonisolated final class CashTreesPWABundleStore {
     static let shared = CashTreesPWABundleStore()
 
     private let fileManager = FileManager.default
@@ -26,45 +27,73 @@ final class CashTreesPWABundleStore {
     let activeDir: URL
     let stagingDir: URL
     let backupDir: URL
+    let otaSignedDir: URL
 
     private(set) var pendingVersion: String?
     /// Active-tree digests computed by this store instance (observed by tests; no behavioral effect).
     private(set) var activeTreeDigestComputations = 0
-    /// The last same-version decision of this store instance (observed by tests; no behavioral effect).
-    private(set) var lastSameVersionDecision = ""
+    /// Per-call outcome of the last cold start (tests and the cold-start log read it).
+    private(set) var lastColdStart = CashTreesPWAColdStartOutcome()
+    /// Process-local digest cache for the active tree, keyed by the metadata fingerprint. The first value in a process
+    /// is always a full digest; a changed fingerprint recomputes; any change to `active/` clears it.
+    private var treeDigestCache: (fingerprint: String, digest: String)?
+    /// Full active-tree digests computed for bridge trust in this store (warm-up or first gate check).
+    private(set) var trustDigestComputations = 0
+    /// Signature checks of stored signed objects, cached by the SHA-256 of the file bytes (one Ed25519 check per file
+    /// per process).
+    private var signedObjectCache: [String: CashTreesPWAOtaManifestCheck] = [:]
+    private(set) var signatureChecks = 0
+    private var generation = 0
+    /// Embedded build identity of this process (set by the cold start; trust and the daemon read it).
+    private var sessionFacts: CashTreesPWAEmbeddedFacts?
+    /// Owner tag of this process's partial staging directory.
+    let processInstance = UUID().uuidString
 
-    private init() {
-        guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+    let otaVerifier: CashTreesPWAOtaVerifier
+    let keyTableId: String
+
+    private convenience init() {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             fatalError("Documents directory unavailable")
         }
-        rootDir = documents.appendingPathComponent("silentpass_pwa", isDirectory: true)
-        activeDir = rootDir.appendingPathComponent("active", isDirectory: true)
-        stagingDir = rootDir.appendingPathComponent("staging", isDirectory: true)
-        backupDir = rootDir.appendingPathComponent("backup", isDirectory: true)
-        pendingVersion = Self.readPendingVersion(from: stagingDir)
-    }
-
-    /// Test seam: the same layout under an explicit root (the app uses `shared`).
-    init(testRootDir: URL) {
-        rootDir = testRootDir
-        activeDir = rootDir.appendingPathComponent("active", isDirectory: true)
-        stagingDir = rootDir.appendingPathComponent("staging", isDirectory: true)
-        backupDir = rootDir.appendingPathComponent("backup", isDirectory: true)
-        pendingVersion = Self.readPendingVersion(from: stagingDir)
-    }
-
-    func bootstrapIfNeeded() throws {
-        let zip = Bundle.main.url(forResource: "SilentPassUI", withExtension: "zip")
-        let facts = Self.embeddedBuildFacts()
-        try bootstrap(
-            bundledZip: zip,
-            embeddedTreeDigest: facts?.treeDigest,
-            embeddedZipSha256: facts?.zipSha256
+        self.init(
+            root: documents.appendingPathComponent("silentpass_pwa", isDirectory: true),
+            otaKeys: CashTreesPWAOtaKeys.trusted,
+            shellBuild: CashTreesPWAOtaVerifier.currentShellBuild
         )
     }
 
+    /// Test seam: the same layout under an explicit root (the app uses `shared`).
+    convenience init(testRootDir: URL, otaKeys: [CashTreesPWAOtaPublicKey] = [], shellBuild: Int64 = 999) {
+        self.init(root: testRootDir, otaKeys: otaKeys, shellBuild: shellBuild)
+    }
+
+    private init(root: URL, otaKeys: [CashTreesPWAOtaPublicKey], shellBuild: Int64) {
+        rootDir = root
+        activeDir = rootDir.appendingPathComponent("active", isDirectory: true)
+        stagingDir = rootDir.appendingPathComponent("staging", isDirectory: true)
+        backupDir = rootDir.appendingPathComponent("backup", isDirectory: true)
+        otaSignedDir = rootDir.appendingPathComponent("ota-signed", isDirectory: true)
+        otaVerifier = CashTreesPWAOtaVerifier(trustedKeys: otaKeys, shellBuild: shellBuild)
+        keyTableId = CashTreesPWAOtaKeys.tableId(otaKeys)
+        pendingVersion = Self.readPendingVersion(from: stagingDir)
+    }
+
+    @MainActor
+    func bootstrapIfNeeded() throws {
+        let zip = Bundle.main.url(forResource: "SilentPassUI", withExtension: "zip")
+        let facts = Self.embeddedBuildFacts()
+        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? ""
+        try coldStart(
+            bundledZip: zip,
+            facts: CashTreesPWAEmbeddedFacts(ver: facts?.ver, zipSha256: facts?.zipSha256, treeDigest: facts?.treeDigest),
+            shellBuild: build
+        )
+        // lastColdStart carries the elapsed time (set when coldStart returns).
+        CashTreesWebConsoleRelay.logNative("[PWA] \(lastColdStart.logLine)")
+    }
+
     /// Build-time identity of the embedded ZIP (BeamioPWABuild.json, written by scripts/pwa-embed-digest.sh).
-    /// nil when the build did not record it: the same-version rule then keeps the active directory.
     static func embeddedBuildFacts(bundle: Bundle = .main) -> (ver: String, zipSha256: String, treeDigest: String)? {
         guard let url = bundle.url(forResource: "BeamioPWABuild", withExtension: "json"),
               let data = try? Data(contentsOf: url),
@@ -76,85 +105,271 @@ final class CashTreesPWABundleStore {
         return (ver, zip, tree)
     }
 
-    /// Core bootstrap with injected embedded-build facts (tests pass fixtures; the app passes Bundle values).
+    /// Compatibility entry for older callers and tests (no embedded version). Prefer `coldStart`.
     func bootstrap(bundledZip zipOptional: URL?, embeddedTreeDigest: String?, embeddedZipSha256: String?) throws {
+        _ = try coldStart(
+            bundledZip: zipOptional,
+            facts: CashTreesPWAEmbeddedFacts(ver: nil, zipSha256: embeddedZipSha256, treeDigest: embeddedTreeDigest),
+            shellBuild: ""
+        )
+    }
+
+    /// Cold start. Fast path: the completion record (v2), this install's identity, the embedded build identity, the
+    /// selected bundle, the active fingerprint and the absence of residue all match, so the active bundle opens with no
+    /// ZIP read, no unpack, no version comparison, no signature check and no full digest. Otherwise the record is deleted
+    /// first and the full pass classifies the candidates and selects one.
+    @discardableResult
+    func coldStart(
+        bundledZip zipOptional: URL?,
+        facts: CashTreesPWAEmbeddedFacts,
+        shellBuild: String
+    ) throws -> CashTreesPWAColdStartOutcome {
         lock.lock()
         defer { lock.unlock() }
+        sessionFacts = facts
+        let started = Date()
+        var outcome = CashTreesPWAColdStartOutcome()
+        func finish() -> CashTreesPWAColdStartOutcome {
+            outcome.elapsedMs = Date().timeIntervalSince(started) * 1000
+            lastColdStart = outcome
+            return outcome
+        }
+        defer { if lastColdStart != outcome { _ = finish() } }
         try fileManager.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        Self.excludeFromBackup(rootDir)
+        let record = CashTreesPWAColdStartRecordIO.read(root: rootDir)
+        let miss = fastPathMissReason(record: record, facts: facts)
+        if miss == nil, let record {
+            outcome.path = .fast
+            outcome.decision = record.decision
+            outcome.selectedOrigin = record.selected.origin
+            outcome.embeddedOutcome = record.embedded.outcome
+            outcome.network = record.network
+            outcome.reason = "hit"
+            return finish()
+        }
+        outcome.path = .full
+        outcome.reason = miss ?? "miss"
+        treeDigestCache = nil
+        guard CashTreesPWAColdStartRecordIO.invalidate(root: rootDir) else {
+            // Delete-before-change could not be kept: open what is there, change nothing, write nothing.
+            outcome.decision = "record-not-deleted"
+            if hasValidBundle(at: activeDir) { return finish() }
+            throw NSError(domain: "CashTreesPWABundleStore", code: 423,
+                          userInfo: [NSLocalizedDescriptionKey: "Cold-start record could not be deleted"])
+        }
+        try fullPass(zipOptional: zipOptional, facts: facts, shellBuild: shellBuild, outcome: &outcome)
+        return finish()
+    }
+
+    /// The whole bundle root (active, staging, backup, signed objects, record, install id) stays out of iCloud and
+    /// device-transfer backups: everything in it is rebuilt from the embedded ZIP or a new signed download. Set on every
+    /// cold start when missing (a metadata read when already set); the flag on the directory covers its contents and
+    /// does not touch the active tree, so the fast path is unaffected.
+    static func excludeFromBackup(_ dir: URL) {
+        var url = dir
+        if (try? url.resourceValues(forKeys: [.isExcludedFromBackupKey]))?.isExcludedFromBackup == true { return }
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
+    }
+
+    /// nil = fast-path hit. Otherwise the miss reason for the log. Stat-level checks only (plus the install id and, for
+    /// an OTA selection, the hash of the <1 KB signed object file): no ZIP, no tree content, no signature check.
+    private func fastPathMissReason(record: CashTreesPWAColdStartRecord?, facts: CashTreesPWAEmbeddedFacts) -> String? {
+        guard let rec = record else {
+            return fileManager.fileExists(atPath: CashTreesPWAColdStartRecordIO.recordURL(root: rootDir).path) ? "parse-error" : "no-record"
+        }
+        guard rec.result == "complete", rec.platform == "ios", rec.variant == "ios" else { return "parse-error" }
+        guard rec.ruleVersion == CashTreesPWAColdStartRecord.ruleVersion else { return "rule-changed" }
+        guard let installId = CashTreesPWAInstallIdentity.read(root: rootDir) else { return "install-unknown" }
+        guard rec.installId == installId else { return "install-changed" }
+        guard let zip = facts.zipSha256, !zip.isEmpty, let tree = facts.treeDigest, !tree.isEmpty else { return "no-embedded-identity" }
+        guard rec.embedded.zipSha256 == zip, rec.embedded.contentDigest == tree else { return "zip-changed" }
+        let residue = [
+            CashTreesPWAColdStartRecordIO.tmpURL(root: rootDir),
+            rootDir.appendingPathComponent("bundled", isDirectory: true),
+            rootDir.appendingPathComponent(CashTreesPWASameVersionRule.previousActiveName, isDirectory: true),
+            recordTempURL(for: activeDir),
+            activeDir.appendingPathComponent(CashTreesPWASameVersionRule.sourceTmpFileName),
+        ]
+        if residue.contains(where: { fileManager.fileExists(atPath: $0.path) }) { return "residue" }
+        if !foreignPartials().isEmpty { return "residue" }
+        guard hasValidBundle(at: activeDir) else { return "active-incomplete" }
+        switch rec.selected.origin {
+        case "embedded":
+            guard rec.selected.contentDigest == tree else { return "selected-changed" }
+        case "ota":
+            guard let ota = rec.selected.ota, ota.keyTableId == keyTableId,
+                  let data = try? Data(contentsOf: rootDir.appendingPathComponent(ota.signedFile)),
+                  data.count <= CashTreesPWAOtaVerifier.maxSignedObjectBytes,
+                  CashTreesPWASameVersionRule.sha256Hex(data) == ota.signedFileSha256
+            else { return "selected-changed" }
+        default:
+            return "parse-error"
+        }
+        guard let fp = CashTreesPWAFingerprint.of(activeDir), fp == rec.activeFingerprint else { return "fingerprint-changed" }
+        return nil
+    }
+
+    /// Full pass. Runs with the record already deleted.
+    private func fullPass(
+        zipOptional: URL?,
+        facts: CashTreesPWAEmbeddedFacts,
+        shellBuild: String,
+        outcome: inout CashTreesPWAColdStartOutcome
+    ) throws {
+        let comparesBefore = CashTreesPWAVersion.compareCount
+        defer { outcome.versionCompareCount = CashTreesPWAVersion.compareCount - comparesBefore }
         recoverInterruptedSwap()
-        guard let zipPath = zipOptional else {
-            if hasValidBundle(at: activeDir) { return }
-            throw NSError(
-                domain: "CashTreesPWABundleStore",
-                code: 404,
-                userInfo: [NSLocalizedDescriptionKey: "SilentPassUI.zip missing from app bundle"]
-            )
+        // A stale unpack target from an interrupted start is never reused; partial staging of other processes is dropped.
+        try? fileManager.removeItem(at: rootDir.appendingPathComponent("bundled", isDirectory: true))
+        for partial in foreignPartials() { try? fileManager.removeItem(at: partial) }
+        let installId = CashTreesPWAInstallIdentity.currentOrCreate(root: rootDir)
+        let activeComplete = hasValidBundle(at: activeDir)
+        guard facts.hasIdentity, let eZip = facts.zipSha256, let eTree = facts.treeDigest else {
+            // No embedded identity: a build defect. Keep a usable active, never record.
+            outcome.decision = "no-embedded-identity"
+            if activeComplete { return }
+            throw NSError(domain: "CashTreesPWABundleStore", code: 404,
+                          userInfo: [NSLocalizedDescriptionKey: "Embedded PWA identity (BeamioPWABuild.json) missing"])
+        }
+
+        // Classify the local active (cryptographic facts only).
+        let activeTree: String? = activeComplete ? countedTreeDigest(activeDir, outcome: &outcome) : nil
+        var local: CashTreesPWACandidateSelector.Local = activeComplete ? .unverifiable : .none
+        var localOta: (manifest: CashTreesPWAOtaManifest, fileSha: String)?
+        if let activeTree {
+            if activeTree == eTree {
+                local = .verifiedEmbedded(ver: facts.ver)
+            } else if let ota = otaIdentityLocked(digest: activeTree, treeDir: activeDir) {
+                local = .verifiedOta(ver: ota.manifest.ver)
+                localOta = ota
+            }
+        }
+
+        // Classify the embedded ZIP: only read when it can matter.
+        var embedded: CashTreesPWACandidateSelector.Embedded = .ok(ver: CashTreesPWAVersion.parse(facts.ver) != nil ? facts.ver : nil)
+        var embeddedZipVerified = false
+        if case .verifiedEmbedded = local {
+            // Identical: no ZIP read.
+        } else {
+            outcome.zipReadCount += 1
+            if let zipPath = zipOptional, CashTreesPWASameVersionRule.fileSHA256(at: zipPath) == eZip {
+                embeddedZipVerified = true
+            } else {
+                embedded = .unusable
+            }
+        }
+
+        // Classify the staged OTA (signed and complete only); an untrusted staging is removed here.
+        let staged = classifyStagedLocked(outcome: &outcome)
+        outcome.network = staged.ota != nil ? "verified-staged" : readOtaStatusResult()
+
+        let action = CashTreesPWACandidateSelector.select(local: local, embedded: embedded, staged: staged.selector)
+        var selectedTree: String?
+        var selectedOta: (manifest: CashTreesPWAOtaManifest, fileSha: String)?
+        switch action {
+        case .keepLocal(let decision, let embeddedOutcome):
+            outcome.decision = decision
+            outcome.embeddedOutcome = embeddedOutcome
+            selectedTree = activeTree
+            selectedOta = localOta
+        case .installEmbedded(let decision):
+            try installEmbedded(zipOptional: zipOptional, eZip: eZip, eTree: eTree, activeComplete: activeComplete,
+                                zipAlreadyVerified: embeddedZipVerified, outcome: &outcome)
+            if outcome.decision == "kept-after-embedded-failure" { return }
+            outcome.decision = decision
+            outcome.embeddedOutcome = "enabled"
+            selectedTree = eTree
+        case .promoteStaged(let decision):
+            guard let s = staged.ota, let digest = staged.digest else { return }
+            try promoteStagedLocked(expectedDigest: digest)
+            outcome.decision = decision
+            outcome.embeddedOutcome = "not-selected"
+            selectedTree = digest
+            selectedOta = s
+        case .noTrustedCandidate:
+            // No verified candidate: an unverifiable active stays (it gets no bridge trust); no record.
+            outcome.decision = "no-trusted-candidate"
+            if activeComplete { return }
+            throw NSError(domain: "CashTreesPWABundleStore", code: 409,
+                          userInfo: [NSLocalizedDescriptionKey: "No verified PWA bundle is available"])
+        case .keepLocalNoRecord:
+            outcome.decision = "kept-embedded-unusable"
+            return
+        }
+        outcome.selectedOrigin = selectedOta == nil ? "embedded" : "ota"
+        let selectedVer = readUpdateInfo(from: activeDir)?.ver
+        reconcileStagingLocked(selectedVersion: selectedVer)
+        gcSignedObjectsLocked()
+        guard let tree = selectedTree, let fp = CashTreesPWAFingerprint.of(activeDir) else { return }
+        // The selected tree was fully digested in this pass: seed the trust cache.
+        treeDigestCache = (fp, tree)
+        generation += 1
+        guard let installId else { return } // identity unknown: no record (retried next start)
+        let ota: CashTreesPWAColdStartRecord.Ota? = selectedOta.map {
+            .init(signedFile: "ota-signed/\(tree).json", signedFileSha256: $0.fileSha, keyId: $0.manifest.keyId,
+                  keyTableId: keyTableId, zipSha256: $0.manifest.sha256)
+        }
+        let record = CashTreesPWAColdStartRecord(
+            schema: CashTreesPWAColdStartRecord.schemaV2,
+            ruleVersion: CashTreesPWAColdStartRecord.ruleVersion,
+            platform: "ios",
+            variant: "ios",
+            installId: installId,
+            shellBuild: shellBuild,
+            embedded: .init(zipSha256: eZip, contentDigest: eTree, ver: facts.ver, outcome: outcome.embeddedOutcome),
+            selected: .init(origin: outcome.selectedOrigin, contentDigest: tree, ver: selectedVer, ota: ota, generation: generation),
+            network: outcome.network,
+            activeFingerprint: fp,
+            decision: outcome.decision,
+            result: "complete",
+            completedAtUtc: ISO8601DateFormatter().string(from: Date())
+        )
+        if shellBuild.isEmpty { return }
+        outcome.recordWritten = CashTreesPWAColdStartRecordIO.write(record, root: rootDir)
+    }
+
+    /// Verifies the embedded ZIP, unpacks it, checks its tree against the build identity and swaps it in.
+    /// When the ZIP cannot be used and a complete active exists, the active is kept (no record: retried next start).
+    private func installEmbedded(
+        zipOptional: URL?, eZip: String, eTree: String, activeComplete: Bool, zipAlreadyVerified: Bool,
+        outcome: inout CashTreesPWAColdStartOutcome
+    ) throws {
+        func keepOrThrow(_ message: String, code: Int) throws {
+            print("[PWA] embedded install refused: \(message)")
+            if activeComplete {
+                outcome.decision = "kept-after-embedded-failure"
+                return
+            }
+            throw NSError(domain: "CashTreesPWABundleStore", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard let zipPath = zipOptional else { return try keepOrThrow("SilentPassUI.zip missing from app bundle", code: 404) }
+        if !zipAlreadyVerified {
+            outcome.zipReadCount += 1
+            guard CashTreesPWASameVersionRule.fileSHA256(at: zipPath) == eZip else {
+                return try keepOrThrow("SilentPassUI.zip does not match the build identity", code: 409)
+            }
         }
         let bundledDir = rootDir.appendingPathComponent("bundled", isDirectory: true)
-        if fileManager.fileExists(atPath: bundledDir.path) {
+        try? fileManager.removeItem(at: bundledDir)
+        do {
+            try fileManager.createDirectory(at: bundledDir, withIntermediateDirectories: true)
+            outcome.unpackCount += 1
+            try fileManager.unzipItem(at: zipPath, to: bundledDir)
+        } catch {
             try? fileManager.removeItem(at: bundledDir)
+            return try keepOrThrow("SilentPassUI.zip could not be unpacked: \(error.localizedDescription)", code: 500)
         }
-        try fileManager.createDirectory(at: bundledDir, withIntermediateDirectories: true)
-        try fileManager.unzipItem(at: zipPath, to: bundledDir)
         removeMacOsMetadata(from: bundledDir)
         guard hasValidBundle(at: bundledDir) else {
             try? fileManager.removeItem(at: bundledDir)
-            throw NSError(
-                domain: "CashTreesPWABundleStore",
-                code: 500,
-                userInfo: [NSLocalizedDescriptionKey: "Bundled SilentPassUI.zip did not contain index.html"]
-            )
+            return try keepOrThrow("Bundled SilentPassUI.zip did not contain index.html", code: 500)
         }
-        let activeIsValid = hasValidBundle(at: activeDir)
-        let activeUsesEmbeddedPaths = activeIsValid && usesEmbeddedAssetPaths(at: activeDir)
-        // Force-quit CallKit wake needs HTTP /api/registerPushDevice so ios_voip
-        // reaches the API when mailbox SI has no push_device_register. A newer
-        // Documents active (e.g. 0.52.852 OTA without HTTP) must not stick over
-        // a bundled build that includes the HTTP fallback.
-        let activeHasPushHttp = activeIsValid && bundleHasRegisterPushDeviceHttp(at: activeDir)
-        let bundledHasPushHttp = bundleHasRegisterPushDeviceHttp(at: bundledDir)
-        let activeVersion = activeIsValid ? readUpdateInfo(from: activeDir)?.ver : nil
-        let bundledVersion = readUpdateInfo(from: bundledDir)?.ver
-        var shouldInstallBundled =
-            !activeIsValid
-            || !activeUsesEmbeddedPaths
-            || (bundledHasPushHttp && !activeHasPushHttp)
-            || (
-                activeVersion != nil
-                    && bundledVersion != nil
-                    && Self.isSemverNewer(oldVer: activeVersion!, newVer: bundledVersion!)
-            )
-        // Same version, different bytes (same-version repair design): decide by provenance, never by version alone.
-        if !shouldInstallBundled, activeIsValid, let av = activeVersion, let bv = bundledVersion, av == bv {
-            let action = CashTreesPWASameVersionRule.decideSameVersion(
-                activeRecord: readSourceRecord(at: activeDir),
-                embeddedTreeDigest: embeddedTreeDigest,
-                embeddedZipSha256: embeddedZipSha256,
-                activeTreeDigest: {
-                    self.activeTreeDigestComputations += 1
-                    return CashTreesPWASameVersionRule.treeDigest(at: self.activeDir, fileManager: self.fileManager)
-                }
-            )
-            switch action {
-            case .keep(let reason):
-                lastSameVersionDecision = "keep: \(reason)"
-                print("[PWA] same-version keep ver=\(av): \(reason)")
-            case .recordLegacy(let tree, let reason):
-                lastSameVersionDecision = "recordLegacy: \(reason)"
-                print("[PWA] same-version record legacy ver=\(av): \(reason)")
-                writeSourceRecord(
-                    CashTreesPWASourceRecord(source: .legacyVerified, ver: av, zipSha256: nil, treeDigest: tree),
-                    at: activeDir
-                )
-            case .reinstall(let reason):
-                lastSameVersionDecision = "reinstall: \(reason)"
-                print("[PWA] same-version reinstall ver=\(av): \(reason)")
-                shouldInstallBundled = true
-            }
-        }
-        if !shouldInstallBundled {
+        guard countedTreeDigest(bundledDir, outcome: &outcome) == eTree else {
             try? fileManager.removeItem(at: bundledDir)
-            return
+            return try keepOrThrow("Unpacked tree does not match the build identity", code: 409)
         }
         // Documents-only swap with a recoverable step order: active -> active.prev, bundled -> active, record, drop prev.
         // Do not touch WKWebsiteDataStore / Library/WebKit.
@@ -173,30 +388,207 @@ final class CashTreesPWABundleStore {
             throw error
         }
         writeSourceRecord(
-            CashTreesPWASourceRecord(
-                source: .bundled,
-                ver: bundledVersion ?? "",
-                zipSha256: embeddedZipSha256,
-                treeDigest: nil
-            ),
+            CashTreesPWASourceRecord(source: .bundled, ver: readUpdateInfo(from: activeDir)?.ver ?? "", zipSha256: eZip, treeDigest: nil),
             at: activeDir
         )
         try? fileManager.removeItem(at: previous)
     }
 
-    /// Restores an interrupted swap (design r3 §4): if `active` is missing and `active.prev` exists, move it back;
-    /// if both exist, the swap completed before the prev was dropped, so keep `active` and drop the stale prev.
+    private func countedTreeDigest(_ dir: URL, outcome: inout CashTreesPWAColdStartOutcome) -> String? {
+        outcome.fullDigestCount += 1
+        activeTreeDigestComputations += 1
+        return CashTreesPWASameVersionRule.treeDigest(at: dir, fileManager: fileManager)
+    }
+
+    // MARK: - Signed OTA identity
+
+    private func signedObjectURL(digest: String) -> URL {
+        otaSignedDir.appendingPathComponent("\(digest).json")
+    }
+
+    /// Caller holds `lock`. The signed OTA identity covering a tree: the stored signed object for `digest` verifies
+    /// with a compiled-in key (v2, minShell, not revoked), its payload contentDigest equals `digest` (a full digest
+    /// computed in this process), and its ver equals the tree's update.json ver. Records and version claims are never
+    /// consulted. nil when anything fails.
+    private func otaIdentityLocked(digest: String, treeDir: URL) -> (manifest: CashTreesPWAOtaManifest, fileSha: String)? {
+        let url = signedObjectURL(digest: digest)
+        guard let data = try? Data(contentsOf: url), data.count <= CashTreesPWAOtaVerifier.maxSignedObjectBytes else { return nil }
+        let fileSha = CashTreesPWASameVersionRule.sha256Hex(data)
+        let check: CashTreesPWAOtaManifestCheck
+        if let cached = signedObjectCache[fileSha] {
+            check = cached
+        } else {
+            signatureChecks += 1
+            check = otaVerifier.verifySignedObject(data)
+            signedObjectCache[fileSha] = check
+        }
+        guard check.verdict == .ok, let manifest = check.manifest,
+              manifest.contentDigest == digest,
+              readUpdateInfo(from: treeDir)?.ver == manifest.ver
+        else { return nil }
+        return (manifest, fileSha)
+    }
+
+    /// Caller holds `lock`. A complete staging tree covered by a valid signed identity is a candidate (S+); any other
+    /// staging is removed.
+    private func classifyStagedLocked(
+        outcome: inout CashTreesPWAColdStartOutcome
+    ) -> (selector: CashTreesPWACandidateSelector.Staged, digest: String?, ota: (manifest: CashTreesPWAOtaManifest, fileSha: String)?) {
+        guard fileManager.fileExists(atPath: stagingDir.path) else { return (.none, nil, nil) }
+        if hasValidBundle(at: stagingDir), let digest = countedTreeDigest(stagingDir, outcome: &outcome),
+           let ota = otaIdentityLocked(digest: digest, treeDir: stagingDir) {
+            return (.verified(ver: ota.manifest.ver), digest, ota)
+        }
+        try? fileManager.removeItem(at: stagingDir)
+        pendingVersion = nil
+        print("[PWA] staging dropped: no valid signed identity")
+        return (.none, nil, nil)
+    }
+
+    /// Caller holds `lock`, record already deleted. Re-verifies the staging right before the move (full digest equal to
+    /// `expectedDigest` and a valid signed identity for it), then moves it into place (active -> backup).
+    private func promoteStagedLocked(expectedDigest: String) throws {
+        guard hasValidBundle(at: stagingDir),
+              let digest = CashTreesPWASameVersionRule.treeDigest(at: stagingDir, fileManager: fileManager),
+              digest == expectedDigest,
+              otaIdentityLocked(digest: digest, treeDir: stagingDir) != nil
+        else {
+            throw NSError(domain: "CashTreesPWABundleStore", code: 403,
+                          userInfo: [NSLocalizedDescriptionKey: "Staged PWA changed or lost its signed identity before promotion"])
+        }
+        if fileManager.fileExists(atPath: backupDir.path) {
+            try? fileManager.removeItem(at: backupDir)
+        }
+        if fileManager.fileExists(atPath: activeDir.path) {
+            try fileManager.moveItem(at: activeDir, to: backupDir)
+        }
+        try fileManager.moveItem(at: stagingDir, to: activeDir)
+        if let ota = readUpdateInfo(from: activeDir)?.ver {
+            writeSourceRecord(CashTreesPWASourceRecord(source: .ota, ver: ota, zipSha256: nil, treeDigest: nil), at: activeDir)
+        }
+        treeDigestCache = nil
+        pendingVersion = nil
+    }
+
+    /// A staged OTA that is not strictly newer than the selected bundle is removed (the staging is signed at this point).
+    private func reconcileStagingLocked(selectedVersion: String?) {
+        guard fileManager.fileExists(atPath: stagingDir.path) else { return }
+        let staged = Self.readPendingVersion(from: stagingDir)
+        if CashTreesPWAVersion.order(staged, selectedVersion) != 1 {
+            try? fileManager.removeItem(at: stagingDir)
+            pendingVersion = nil
+            print("[PWA] staging dropped: staged=\(staged ?? "unknown") selected=\(selectedVersion ?? "unknown")")
+        }
+    }
+
+    /// Keeps the signed objects referenced by the active and the staging trees plus the three newest; removes the rest.
+    private func gcSignedObjectsLocked() {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: otaSignedDir.path) else { return }
+        var keep = Set<String>()
+        if let d = treeDigestCache?.digest { keep.insert("\(d).json") }
+        let files = names.filter { $0.hasSuffix(".json") }.compactMap { name -> (String, Date)? in
+            let url = otaSignedDir.appendingPathComponent(name)
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return (name, date)
+        }.sorted { $0.1 > $1.1 }
+        for (i, f) in files.enumerated() where i >= 3 && !keep.contains(f.0) {
+            try? fileManager.removeItem(at: otaSignedDir.appendingPathComponent(f.0))
+        }
+        for name in names where name.hasPrefix(".") && name.hasSuffix(".tmp") {
+            try? fileManager.removeItem(at: otaSignedDir.appendingPathComponent(name))
+        }
+    }
+
+    private func partialName() -> String { ".staging-partial-\(processInstance)" }
+
+    /// Partial staging directories owned by other process instances (leftovers of an interrupted download).
+    private func foreignPartials() -> [URL] {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: rootDir.path) else { return [] }
+        return names.filter { $0.hasPrefix(".staging-partial-") && $0 != partialName() }
+            .map { rootDir.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    /// The network check's last result (diagnostics only; never a trust or selection input).
+    private func readOtaStatusResult() -> String {
+        guard let data = try? Data(contentsOf: rootDir.appendingPathComponent("ota-status.v1.json")),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let result = obj["result"] as? String
+        else { return "none" }
+        return result
+    }
+
+    /// Writes ota-status.v1.json atomically (diagnostics only).
+    func writeOtaStatus(result: String, verdict: String?, ver: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        try? fileManager.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        var obj: [String: Any] = ["result": result, "checkedAtUtc": ISO8601DateFormatter().string(from: Date())]
+        if let verdict { obj["verdict"] = verdict }
+        if let ver { obj["ver"] = ver }
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else { return }
+        _ = Self.atomicWrite(data, to: rootDir.appendingPathComponent("ota-status.v1.json"), dir: rootDir)
+    }
+
+    private static func atomicWrite(_ data: Data, to final: URL, dir: URL) -> Bool {
+        let tmp = dir.appendingPathComponent(".\(final.lastPathComponent).\(UUID().uuidString).tmp")
+        let fd = open(tmp.path, O_CREAT | O_TRUNC | O_WRONLY, 0o600)
+        guard fd >= 0 else { return false }
+        let written = data.withUnsafeBytes { buf -> Int in
+            guard let base = buf.baseAddress else { return -1 }
+            return Darwin.write(fd, base, buf.count)
+        }
+        let synced = fsync(fd) == 0
+        close(fd)
+        guard written == data.count, synced, rename(tmp.path, final.path) == 0 else {
+            unlink(tmp.path)
+            return false
+        }
+        CashTreesPWAColdStartRecordIO.fsyncDirectory(dir)
+        return true
+    }
+
+    /// Caller holds `lock`. Version of the selected verified bundle: the active when it resolves to the embedded or a
+    /// signed OTA identity, otherwise the embedded build constant. Never "0.0.0" and never an unverified claim.
+    private func selectedVerifiedVersionLocked() -> String? {
+        let facts = sessionFacts ?? Self.embeddedBuildFacts().map {
+            CashTreesPWAEmbeddedFacts(ver: $0.ver, zipSha256: $0.zipSha256, treeDigest: $0.treeDigest)
+        }
+        if hasValidBundle(at: activeDir), let d = cachedActiveTreeDigestLocked(digest: { CashTreesPWASameVersionRule.treeDigest(at: $0) }) {
+            if d == facts?.treeDigest { return facts?.ver }
+            if let ota = otaIdentityLocked(digest: d, treeDir: activeDir) { return ota.manifest.ver }
+        }
+        return facts?.ver
+    }
+
+    /// The daemon's reference version (see `selectedVerifiedVersionLocked`).
+    func selectedVerifiedVersion() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return selectedVerifiedVersionLocked()
+    }
+
+    // MARK: - Interrupted swaps
+
+    /// Restores an interrupted swap: if `active` is missing and `active.prev` exists, move it back; if both exist, the
+    /// swap completed before the prev was dropped, so keep `active` and drop the stale prev. An OTA promotion killed
+    /// between "active -> backup" and "staging -> active" leaves no complete active and a complete backup: move the
+    /// backup back (the staging stays and is reconciled later).
     func recoverInterruptedSwap() {
-        // A record temp file is never written inside the tree (it lives beside the tree), so a stray one here is a
-        // leftover of an interrupted write. Clear it before any gate check reads the active tree.
         try? fileManager.removeItem(at: recordTempURL(for: activeDir))
         try? fileManager.removeItem(at: activeDir.appendingPathComponent(CashTreesPWASameVersionRule.sourceTmpFileName))
         let previous = rootDir.appendingPathComponent(CashTreesPWASameVersionRule.previousActiveName, isDirectory: true)
-        guard fileManager.fileExists(atPath: previous.path) else { return }
-        if fileManager.fileExists(atPath: activeDir.path) {
-            try? fileManager.removeItem(at: previous)
-        } else {
-            try? fileManager.moveItem(at: previous, to: activeDir)
+        if fileManager.fileExists(atPath: previous.path) {
+            if fileManager.fileExists(atPath: activeDir.path) {
+                try? fileManager.removeItem(at: previous)
+            } else {
+                try? fileManager.moveItem(at: previous, to: activeDir)
+            }
+        }
+        if !hasValidBundle(at: activeDir), hasValidBundle(at: backupDir) {
+            try? fileManager.removeItem(at: activeDir)
+            if (try? fileManager.moveItem(at: backupDir, to: activeDir)) != nil {
+                print("[PWA] interrupted OTA promotion: backup restored to active")
+            }
         }
     }
 
@@ -218,10 +610,10 @@ final class CashTreesPWABundleStore {
         let final = dir.appendingPathComponent(CashTreesPWASameVersionRule.sourceFileName)
         do {
             try data.write(to: tmp, options: .atomic)
-            if fileManager.fileExists(atPath: final.path) {
-                try fileManager.removeItem(at: final)
+            // rename(2) replaces the record atomically (no remove-then-move window).
+            guard rename(tmp.path, final.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
-            try fileManager.moveItem(at: tmp, to: final)
         } catch {
             print("[PWA] source record write failed in \(dir.lastPathComponent): \(error.localizedDescription)")
             try? fileManager.removeItem(at: tmp)
@@ -234,17 +626,36 @@ final class CashTreesPWABundleStore {
         return activeDir
     }
 
+    /// Display version of the active bundle ("" when unreadable). Not a trust or selection input.
     func activeVersion() -> String {
-        readUpdateInfo(from: activeDir)?.ver ?? "0.0.0"
+        readUpdateInfo(from: activeDir)?.ver ?? ""
     }
 
-    /// Checks the active content under the same lock used by bootstrap and OTA promotion.
-    /// Native bridge trust must fail closed if the extracted page differs from the reviewed ZIP.
+    /// The identity the active tree resolves to: the embedded build (tree and version equal the build constants) or a
+    /// signed OTA identity (signed object verified with a compiled-in key, payload contentDigest == full digest).
+    /// nil when neither holds. Records, version claims and status files are never consulted.
+    func activeResolvedIdentity(
+        embeddedVersion: String, embeddedTree: String, digest: (URL) -> String?
+    ) -> (version: String, tree: String, zipSha256: String?, origin: String)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard hasValidBundle(at: activeDir), let d = cachedActiveTreeDigestLocked(digest: digest) else { return nil }
+        let ver = readUpdateInfo(from: activeDir)?.ver
+        if !embeddedTree.isEmpty, d == embeddedTree, ver == embeddedVersion {
+            return (embeddedVersion, d, nil, "embedded")
+        }
+        if let ota = otaIdentityLocked(digest: d, treeDir: activeDir) {
+            return (ota.manifest.ver, d, ota.manifest.sha256, "ota")
+        }
+        return nil
+    }
+
+    /// Checks the active content under the same lock used by bootstrap and OTA promotion (embedded identity only).
     func activeBundleMatches(expectedVersion: String, expectedTreeSHA256: String, digest: (URL) -> String?) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard hasValidBundle(at: activeDir), readUpdateInfo(from: activeDir)?.ver == expectedVersion,
-              let actual = digest(activeDir)
+              let actual = cachedActiveTreeDigestLocked(digest: digest)
         else { return false }
         return actual == expectedTreeSHA256
     }
@@ -253,7 +664,46 @@ final class CashTreesPWABundleStore {
         lock.lock()
         defer { lock.unlock() }
         guard hasValidBundle(at: activeDir) else { return nil }
-        return digest(activeDir)
+        return cachedActiveTreeDigestLocked(digest: digest)
+    }
+
+    /// Caller holds `lock`. The active fingerprint is the cache key: an unchanged fingerprint reuses the digest computed
+    /// earlier in this process; a changed or unreadable fingerprint recomputes the full digest. Never seeded from the record.
+    private func cachedActiveTreeDigestLocked(digest: (URL) -> String?) -> String? {
+        let fp = CashTreesPWAFingerprint.of(activeDir)
+        if let fp, let cached = treeDigestCache, cached.fingerprint == fp {
+            return cached.digest
+        }
+        trustDigestComputations += 1
+        guard let value = digest(activeDir) else { return nil }
+        if let fp { treeDigestCache = (fp, value) } else { treeDigestCache = nil }
+        return value
+    }
+
+    /// Bridge-trust warm-up after a start: one full digest (and, for an OTA tree, one signature check) in the background,
+    /// before the first gate check needs it. When the tree resolves to neither the embedded build nor a signed OTA
+    /// identity, the completion record is deleted so the next cold start decides again; the bridge stays closed through
+    /// NativeBridgeTrust either way.
+    @discardableResult
+    func warmUpTrust(expectedEmbeddedTree: String, digest: (URL) -> String?) -> (digest: String?, trusted: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard hasValidBundle(at: activeDir) else { return (nil, false) }
+        let value = cachedActiveTreeDigestLocked(digest: digest)
+        var trusted = value != nil && value == expectedEmbeddedTree
+        if !trusted, let value, otaIdentityLocked(digest: value, treeDir: activeDir) != nil { trusted = true }
+        if !trusted {
+            CashTreesPWAColdStartRecordIO.invalidate(root: rootDir)
+            treeDigestCache = nil
+            print("[PWA] trust warm-up: active tree has no trusted identity; record deleted, bridge stays closed")
+        }
+        return (value, trusted)
+    }
+
+    /// Compatibility wrapper (embedded identity or signed OTA identity).
+    @discardableResult
+    func warmUpTrustDigest(expectedTreeSHA256: String, digest: (URL) -> String?) -> String? {
+        warmUpTrust(expectedEmbeddedTree: expectedTreeSHA256, digest: digest).digest
     }
 
     func resolveFileURL(for requestPath: String) -> URL? {
@@ -302,62 +752,63 @@ final class CashTreesPWABundleStore {
         return candidate.path == root.path || candidate.path.hasPrefix(rootPath)
     }
 
-    func installDownloadToStaging(from zipFile: URL, expectedVersion: String) throws {
+    /// Stages a downloaded OTA bundle whose signed manifest and ZIP bytes (size, sha256) were already verified.
+    /// Unpacks outside the lock into this process's partial directory, checks the canonical form, index.html, the ZIP's
+    /// own update.json ver (never rewritten) and beamio-tree-v1 == payload.contentDigest. Then, under the lock, re-reads
+    /// the reference version, writes ota-signed/<digest>.json atomically and renames the partial into staging.
+    func installDownloadToStaging(zip zipFile: URL, manifest: CashTreesPWAOtaManifest, signedObject: Data) throws -> CashTreesPWAOtaVerdict {
+        let partial = rootDir.appendingPathComponent(partialName(), isDirectory: true)
+        try? fileManager.removeItem(at: partial)
+        try fileManager.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: partial) }
+        let verdict = CashTreesPWAZipCanonical.extractVerified(zip: zipFile, to: partial, expectedVer: manifest.ver,
+                                                               expectedContentDigest: manifest.contentDigest)
+        guard verdict == .ok, hasValidBundle(at: partial) else { return verdict == .ok ? .noncanonicalZip : verdict }
+
         lock.lock()
         defer { lock.unlock() }
-        if fileManager.fileExists(atPath: stagingDir.path) {
-            try fileManager.removeItem(at: stagingDir)
+        guard CashTreesPWAVersion.order(manifest.ver, selectedVerifiedVersionLocked()) == 1 else { return .downgrade }
+        try fileManager.createDirectory(at: otaSignedDir, withIntermediateDirectories: true)
+        guard Self.atomicWrite(signedObject, to: signedObjectURL(digest: manifest.contentDigest), dir: otaSignedDir) else {
+            throw NSError(domain: "CashTreesPWABundleStore", code: 500,
+                          userInfo: [NSLocalizedDescriptionKey: "Signed OTA object could not be written"])
         }
-        try fileManager.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-        try fileManager.unzipItem(at: zipFile, to: stagingDir)
-        removeMacOsMetadata(from: stagingDir)
-        guard hasValidBundle(at: stagingDir) else {
-            try? fileManager.removeItem(at: stagingDir)
-            pendingVersion = nil
-            throw NSError(
-                domain: "CashTreesPWABundleStore",
-                code: 500,
-                userInfo: [NSLocalizedDescriptionKey: "Downloaded bundle missing index.html"]
-            )
-        }
-        // Persist version for cold-start pending restore (zip usually includes update.json).
-        let info = CashTreesPWAUpdateInfo(ver: expectedVersion, filename: "SilentPassUI-\(expectedVersion).zip")
-        if let data = try? JSONEncoder().encode(info) {
-            try? data.write(to: stagingDir.appendingPathComponent("update.json"), options: .atomic)
-        }
-        pendingVersion = expectedVersion
+        try? fileManager.removeItem(at: stagingDir)
+        try fileManager.moveItem(at: partial, to: stagingDir)
+        CashTreesPWAColdStartRecordIO.fsyncDirectory(rootDir)
+        pendingVersion = manifest.ver
+        return .ok
     }
 
+    /// Page-requested promotion of the staged OTA. The staging must resolve to a signed identity (re-verified, full
+    /// digest) and be strictly newer than the selected verified bundle; the record is deleted first (refused if it cannot
+    /// be). No completion record is written here: the next cold start classifies the new active and records it.
     func promoteStagingToActive() throws {
         lock.lock()
         defer { lock.unlock() }
-        // `pendingVersion` is an in-memory hint and can be lost when the
-        // WebView/app lifecycle recreates the store. The staging directory is
-        // the durable source of truth for an OTA update.
         pendingVersion = Self.readPendingVersion(from: stagingDir)
         guard hasValidBundle(at: stagingDir) else {
             pendingVersion = nil
-            throw NSError(
-                domain: "CashTreesPWABundleStore",
-                code: 404,
-                userInfo: [NSLocalizedDescriptionKey: "No staged PWA update"]
-            )
+            throw NSError(domain: "CashTreesPWABundleStore", code: 404,
+                          userInfo: [NSLocalizedDescriptionKey: "No staged PWA update"])
         }
-        if fileManager.fileExists(atPath: backupDir.path) {
-            try? fileManager.removeItem(at: backupDir)
+        guard let digest = CashTreesPWASameVersionRule.treeDigest(at: stagingDir, fileManager: fileManager),
+              let ota = otaIdentityLocked(digest: digest, treeDir: stagingDir)
+        else {
+            throw NSError(domain: "CashTreesPWABundleStore", code: 403,
+                          userInfo: [NSLocalizedDescriptionKey: "Staged PWA has no valid signed identity"])
         }
-        if fileManager.fileExists(atPath: activeDir.path) {
-            try fileManager.moveItem(at: activeDir, to: backupDir)
+        guard CashTreesPWAVersion.order(ota.manifest.ver, selectedVerifiedVersionLocked()) == 1 else {
+            throw NSError(domain: "CashTreesPWABundleStore", code: 409,
+                          userInfo: [NSLocalizedDescriptionKey: "Staged PWA is not strictly newer than the selected bundle"])
         }
-        try fileManager.moveItem(at: stagingDir, to: activeDir)
-        // Provenance: an OTA-promoted active is never overwritten by the same version (design r3 §3).
-        if let ota = readUpdateInfo(from: activeDir)?.ver {
-            writeSourceRecord(
-                CashTreesPWASourceRecord(source: .ota, ver: ota, zipSha256: nil, treeDigest: nil),
-                at: activeDir
-            )
+        // Delete-before-change: the completion record goes before the active directory moves.
+        treeDigestCache = nil
+        guard CashTreesPWAColdStartRecordIO.invalidate(root: rootDir) else {
+            throw NSError(domain: "CashTreesPWABundleStore", code: 423,
+                          userInfo: [NSLocalizedDescriptionKey: "Cold-start record could not be deleted; promotion refused"])
         }
-        pendingVersion = nil
+        try promoteStagedLocked(expectedDigest: digest)
     }
 
     func clearStaging() {
@@ -392,42 +843,7 @@ final class CashTreesPWABundleStore {
         fileManager.fileExists(atPath: dir.appendingPathComponent("index.html").path)
     }
 
-    /// The app shell serves the PWA at the root of `cashtrees-local://`.
-    /// Older consumer bundles were built for `/app/`, so their JS/CSS requests
-    /// pointed at a non-existent local `/app` directory and left only the splash
-    /// logo visible. Treat those bundles as incompatible even when their
-    /// semver is unchanged, so an app update repairs existing installations.
-    private func usesEmbeddedAssetPaths(at dir: URL) -> Bool {
-        let indexURL = dir.appendingPathComponent("index.html")
-        guard let html = try? String(contentsOf: indexURL, encoding: .utf8) else {
-            return false
-        }
-        return !html.contains("src=\"/app/")
-            && !html.contains("href=\"/app/")
-    }
 
-    /// True when any JS chunk posts to `/api/registerPushDevice` (HTTP fallback
-    /// for PushKit `ios_voip` when CoNET-SI lacks `push_device_register`).
-    private func bundleHasRegisterPushDeviceHttp(at dir: URL) -> Bool {
-        let staticDir = dir.appendingPathComponent("static/js", isDirectory: true)
-        let fm = fileManager
-        guard let enumerator = fm.enumerator(
-            at: staticDir,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return false
-        }
-        let needle = "/api/registerPushDevice"
-        while let item = enumerator.nextObject() as? URL {
-            guard item.pathExtension == "js",
-                  let data = try? Data(contentsOf: item, options: [.mappedIfSafe]),
-                  let text = String(data: data, encoding: .utf8)
-            else { continue }
-            if text.contains(needle) { return true }
-        }
-        return false
-    }
 
     private func readUpdateInfo(from dir: URL) -> CashTreesPWAUpdateInfo? {
         let url = dir.appendingPathComponent("update.json")
@@ -457,16 +873,8 @@ final class CashTreesPWABundleStore {
         }
     }
 
+    /// Strict comparison: three numeric segments only; an unknown version on either side is never newer.
     static func isSemverNewer(oldVer: String, newVer: String) -> Bool {
-        let oldParts = oldVer.split(separator: ".").map { Int($0) ?? 0 }
-        let newParts = newVer.split(separator: ".").map { Int($0) ?? 0 }
-        let count = max(oldParts.count, newParts.count)
-        for i in 0..<count {
-            let o = i < oldParts.count ? oldParts[i] : 0
-            let n = i < newParts.count ? newParts[i] : 0
-            if n > o { return true }
-            if n < o { return false }
-        }
-        return false
+        CashTreesPWAVersion.isStrictlyNewer(old: oldVer, new: newVer) == true
     }
 }

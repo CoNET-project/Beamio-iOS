@@ -10,7 +10,7 @@ import CryptoKit
 import Foundation
 
 /// Provenance of the active PWA directory, written as `active/.source.json` (atomic tmp + rename).
-struct CashTreesPWASourceRecord: Codable, Equatable {
+nonisolated struct CashTreesPWASourceRecord: Codable, Equatable {
     enum Source: String, Codable {
         case bundled
         case ota
@@ -24,7 +24,7 @@ struct CashTreesPWASourceRecord: Codable, Equatable {
     let treeDigest: String?
 }
 
-enum CashTreesPWAReunpackAction: Equatable {
+nonisolated enum CashTreesPWAReunpackAction: Equatable {
     /// Keep the active directory unchanged.
     case keep(reason: String)
     /// Keep the active directory and write a `legacy-verified` record with this tree digest (no later recompute).
@@ -33,7 +33,7 @@ enum CashTreesPWAReunpackAction: Equatable {
     case reinstall(reason: String)
 }
 
-enum CashTreesPWASameVersionRule {
+nonisolated enum CashTreesPWASameVersionRule {
     static let sourceFileName = ".source.json"
     static let sourceTmpFileName = ".source.json.tmp"
     static let previousActiveName = "active.prev"

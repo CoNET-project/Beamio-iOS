@@ -187,6 +187,9 @@ if [[ "$MODE" == formal && "$CR_RC" != 0 ]]; then echo "FORMAL REFUSED: page con
 QM_RESULT="$("$PWD/scripts/verify-ios-qa-marker-off.sh" "$APP_IN_IPA" 2>&1)" && QM_RC=0 || QM_RC=$?
 echo "$QM_RESULT"
 if [[ "$MODE" == formal && "$QM_RC" != 0 ]]; then echo "FORMAL REFUSED: QA marker in the formal package" >&2; exit 1; fi
+OTA_RESULT="$("$PWD/scripts/verify-ios-ota-release.sh" "$APP_IN_IPA" 2>&1)" && OTA_RC=0 || OTA_RC=$?
+echo "$OTA_RESULT"
+if [[ "$MODE" == formal && "$OTA_RC" != 0 ]]; then echo "FORMAL REFUSED: QA OTA override or test key in the formal package" >&2; exit 1; fi
 
 # Same-archive evidence: the archive's file-tree digest and main binary, and per IPA the embedded ZIP and the main
 # binary with its signature removed, so a device-test IPA can be shown to carry the store IPA's code.
@@ -293,6 +296,7 @@ RECEIPT="$OUT/${QA_LABEL}RECEIPT.txt"
   echo "webinspector_off_exit: $WI_RC"
   echo "console_relay_off_exit: $CR_RC"
   echo "qa_marker_off_exit: $QM_RC"
+  echo "ota_release_exit: $OTA_RC"
   echo "passcode_no_logging_exit: $PNL_RC"
   echo "export_method: $EXPORT_METHOD"
   echo "export_options_sha256: $EXPORT_PLIST_SHA"

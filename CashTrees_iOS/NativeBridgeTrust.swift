@@ -9,6 +9,8 @@ enum NativeBridgeTrust {
         let version: String
         let zipSHA256: String
         let treeSHA256: String
+        /// "embedded" (BeamioPWABuild.json) or "ota" (signed OTA identity verified with a compiled-in key).
+        var origin: String = "embedded"
     }
 
     /// Pure: the identity from the build sidecar facts, or nil (fail closed) when any field is missing or empty.
@@ -45,10 +47,12 @@ enum NativeBridgeTrust {
         type != "pgpDecryptInbound"
     }
 
-    static func documentGenerationMatches(capturedAtNavigation: String?, currentActive: String?) -> Bool {
-        guard let capturedAtNavigation, let currentActive else { return false }
-        return capturedAtNavigation == expectedActiveTreeSHA256
-            && currentActive == expectedActiveTreeSHA256
+    static func documentGenerationMatches(
+        capturedAtNavigation: String?, currentActive: String?, expectedTree: String = expectedActiveTreeSHA256
+    ) -> Bool {
+        guard let capturedAtNavigation, let currentActive, !expectedTree.isEmpty else { return false }
+        return capturedAtNavigation == expectedTree
+            && currentActive == expectedTree
             && capturedAtNavigation == currentActive
     }
 
@@ -59,15 +63,30 @@ enum NativeBridgeTrust {
         port: Int,
         activeVersion: String,
         embeddedZipSHA256: String,
-        activeTreeSHA256: String
+        activeTreeSHA256: String,
+        expected: Identity? = embeddedIdentity
     ) -> Bool {
-        isMainFrame
+        guard let expected, !expected.treeSHA256.isEmpty else { return false }
+        return isMainFrame
             && scheme.lowercased() == CashTreesPWAScheme.scheme
             && host.lowercased() == CashTreesPWAScheme.host
             && port == 0
-            && activeVersion == expectedPwaVersion
+            && activeVersion == expected.version
             && embeddedZipSHA256.lowercased() == expectedEmbeddedZipSHA256
-            && activeTreeSHA256.lowercased() == expectedActiveTreeSHA256
+            && activeTreeSHA256.lowercased() == expected.treeSHA256
+    }
+
+    /// The identity the active bundle resolves to right now: the embedded build, or a signed OTA identity (compiled-in
+    /// public key, payload contentDigest equal to the full active digest). Records, version claims and status files are
+    /// never consulted. nil = no trusted identity (every command fails closed).
+    static func resolvedIdentity() -> Identity? {
+        guard let resolved = CashTreesPWABundleStore.shared.activeResolvedIdentity(
+            embeddedVersion: expectedPwaVersion,
+            embeddedTree: expectedActiveTreeSHA256,
+            digest: treeDigestOfActive(_:)
+        ) else { return nil }
+        return Identity(version: resolved.version, zipSHA256: expectedEmbeddedZipSHA256, treeSHA256: resolved.tree,
+                        origin: resolved.origin)
     }
 
     static func currentBundleIsTrusted(
@@ -82,7 +101,8 @@ enum NativeBridgeTrust {
         // This generation is captured by the native navigation delegate before
         // the document commits. A page cannot self-assert a newer URL/token after
         // an OTA promotion to inherit trust from the newly active tree.
-        bundleTrusted(
+        let resolved = resolvedIdentity()
+        return bundleTrusted(
             isMainFrame: isMainFrame,
             scheme: scheme,
             host: host,
@@ -91,14 +111,12 @@ enum NativeBridgeTrust {
             committedDocumentURL: committedDocumentURL,
             generationMatches: documentGenerationMatches(
                 capturedAtNavigation: documentTreeSHA256,
-                currentActive: CashTreesPWABundleStore.shared.activeTreeSHA256(digest: treeDigestOfActive(_:))
+                currentActive: CashTreesPWABundleStore.shared.activeTreeSHA256(digest: treeDigestOfActive(_:)),
+                expectedTree: resolved?.treeSHA256 ?? ""
             ),
             zipMatches: embeddedZipMatches(),
-            activeBundleMatches: CashTreesPWABundleStore.shared.activeBundleMatches(
-                expectedVersion: expectedPwaVersion,
-                expectedTreeSHA256: expectedActiveTreeSHA256,
-                digest: treeDigestOfActive(_:)
-            )
+            activeBundleMatches: resolved != nil,
+            expected: resolved
         )
     }
 
@@ -114,20 +132,23 @@ enum NativeBridgeTrust {
         committedDocumentURL: URL?,
         generationMatches: @autoclosure () -> Bool,
         zipMatches: @autoclosure () -> Bool,
-        activeBundleMatches: @autoclosure () -> Bool
+        activeBundleMatches: @autoclosure () -> Bool,
+        expected: Identity? = embeddedIdentity
     ) -> Bool {
         guard sameDocument(frameDocumentURL, committedDocumentURL),
               generationMatches()
         else { return false }
         guard zipMatches() else { return false }
+        guard let expected else { return false }
         return activeBundleMatches() && isTrusted(
             isMainFrame: isMainFrame,
             scheme: scheme,
             host: host,
             port: port,
-            activeVersion: expectedPwaVersion,
+            activeVersion: expected.version,
             embeddedZipSHA256: expectedEmbeddedZipSHA256,
-            activeTreeSHA256: expectedActiveTreeSHA256
+            activeTreeSHA256: expected.treeSHA256,
+            expected: expected
         )
     }
 
@@ -146,12 +167,18 @@ enum NativeBridgeTrust {
     }
 
     /// The embedded SilentPassUI.zip matches the pinned digest.
+    /// The app bundle is read-only and sealed by the code signature, so the embedded ZIP is hashed once per process
+    ///: the first call is a full SHA-256, later calls reuse that result.
     static func embeddedZipMatches() -> Bool {
+        embeddedZipMatchesOnce
+    }
+
+    private static let embeddedZipMatchesOnce: Bool = {
         guard let zip = Bundle.main.url(forResource: "SilentPassUI", withExtension: "zip"),
               let zipData = try? Data(contentsOf: zip, options: .mappedIfSafe)
         else { return false }
         return digest(zipData) == expectedEmbeddedZipSHA256
-    }
+    }()
 
     /// The gate's tree digest is the build algorithm itself: one implementation, no second copy.
     nonisolated static func treeDigestOfActive(_ root: URL) -> String? {
